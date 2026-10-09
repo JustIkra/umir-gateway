@@ -1,0 +1,17 @@
+.git
+.github
+.memory-base
+.env
+.env.*
+**/.npmrc
+**/.netrc
+**/*.pem
+**/id_rsa
+**/id_ed25519
+node_modules
+dist
+bin
+coverage.out
+*.md
+compose*.yaml
+

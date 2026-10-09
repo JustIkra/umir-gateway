@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.memory-base/
+.DS_Store
+coverage.out
+bin/
+node_modules/
+dist/
+
