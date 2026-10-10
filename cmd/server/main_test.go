@@ -15,13 +15,19 @@ func TestProxyRoutesPreserveRequestAndResponse(t *testing.T) {
 				if r.URL.Path != "/orders" || r.URL.RawQuery != "limit=2" || r.Method != http.MethodPost {
 					t.Errorf("request: %s %s", r.Method, r.URL)
 				}
-				body, _ := io.ReadAll(r.Body)
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read upstream body: %v", err)
+					return
+				}
 				if string(body) != "payload" {
 					t.Errorf("body: %s", body)
 				}
 				w.Header().Set("X-Upstream", service)
 				w.WriteHeader(http.StatusAccepted)
-				_, _ = w.Write([]byte("accepted"))
+				if _, err := w.Write([]byte("accepted")); err != nil {
+					t.Errorf("write upstream response: %v", err)
+				}
 			}))
 			defer upstream.Close()
 			t.Setenv(strings.ToUpper(service)+"_URL", upstream.URL)
