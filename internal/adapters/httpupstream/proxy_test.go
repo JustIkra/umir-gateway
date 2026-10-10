@@ -69,7 +69,13 @@ func TestNewProxyRejectsInvalidDependencies(t *testing.T) {
 }
 
 func TestProxyForwardsRequestUnchanged(t *testing.T) {
-	transport := &recordingTransport{response: jsonResponse(http.StatusOK, `{}`)}
+	upstreamResponse := jsonResponse(http.StatusOK, `{}`)
+	defer func() {
+		if err := upstreamResponse.Body.Close(); err != nil {
+			t.Errorf("close fixture response: %v", err)
+		}
+	}()
+	transport := &recordingTransport{response: upstreamResponse}
 	proxy, err := NewProxy(mustURL(t, "http://serving:8080/base"), transport)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +123,13 @@ func TestProxyReturnsUpstreamResponseUnchanged(t *testing.T) {
 	const body = `{"kind":"ProposalSuperseded","supersededBy":"p-2","stateVersion":"9007199254740993"}`
 	for _, status := range []int{http.StatusAccepted, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			proxy, err := NewProxy(mustURL(t, "http://serving:8080"), &recordingTransport{response: jsonResponse(status, body)})
+			upstreamResponse := jsonResponse(status, body)
+			defer func() {
+				if err := upstreamResponse.Body.Close(); err != nil {
+					t.Errorf("close fixture response: %v", err)
+				}
+			}()
+			proxy, err := NewProxy(mustURL(t, "http://serving:8080"), &recordingTransport{response: upstreamResponse})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -4,6 +4,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 )
 
@@ -20,7 +21,9 @@ func NewRouter(upstreams Upstreams) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "umir-gateway"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "umir-gateway"}); err != nil {
+			log.Printf("health response: %v", err)
+		}
 	})
 	mux.Handle("/api/serving/", http.StripPrefix("/api/serving", upstreams.Serving))
 	mux.Handle("/api/warehouse/", http.StripPrefix("/api/warehouse", upstreams.Warehouse))

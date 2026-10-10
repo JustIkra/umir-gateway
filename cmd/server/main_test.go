@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -56,13 +57,19 @@ func TestProxyRoutesPreserveRequestAndResponse(t *testing.T) {
 				if r.URL.Path != "/orders" || r.URL.RawQuery != "limit=2" || r.Method != http.MethodPost {
 					t.Errorf("request: %s %s", r.Method, r.URL)
 				}
-				body, _ := io.ReadAll(r.Body)
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read upstream body: %v", err)
+					return
+				}
 				if string(body) != "payload" {
 					t.Errorf("body: %s", body)
 				}
 				w.Header().Set("X-Upstream", service)
 				w.WriteHeader(http.StatusAccepted)
-				_, _ = w.Write([]byte("accepted"))
+				if _, err := w.Write([]byte("accepted")); err != nil {
+					t.Errorf("write upstream response: %v", err)
+				}
 			}))
 			defer upstream.Close()
 			urls := map[string]string{"serving": unusedUpstream(t), "warehouse": unusedUpstream(t)}
@@ -81,14 +88,19 @@ func TestProxyRoutesPreserveRequestAndResponse(t *testing.T) {
 func TestLostResponseAfterWriteIsUnknownAndNotRetried(t *testing.T) {
 	var received atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
+		if _, err := io.ReadAll(r.Body); err != nil {
+			t.Errorf("read upstream body: %v", err)
+			return
+		}
 		received.Add(1)
 		conn, _, err := http.NewResponseController(w).Hijack()
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		_ = conn.Close()
+		if err := conn.Close(); err != nil {
+			t.Errorf("close upstream connection: %v", err)
+		}
 	}))
 	defer upstream.Close()
 	app := gateway(t, upstream.URL, unusedUpstream(t), "")
@@ -152,7 +164,9 @@ func TestSlowUpstreamTimesOutAndIsCancelled(t *testing.T) {
 
 func TestStalledRequestBodyIsBoundedByUpstreamTimeout(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
+		if _, err := io.ReadAll(r.Body); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("read stalled upstream body: %v", err)
+		}
 	}))
 	defer upstream.Close()
 	front := httptest.NewServer(gateway(t, upstream.URL, unusedUpstream(t), "100ms"))
@@ -162,9 +176,15 @@ func TestStalledRequestBodyIsBoundedByUpstreamTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close client connection: %v", err)
+		}
+	}()
 	// Far beyond the budget: an unbounded body read fails here instead of hanging the test.
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	// Content-Length promises two bytes; the client sends one and stalls.
 	request := "POST /api/serving/order-confirmations HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{"
 	if _, err := io.WriteString(conn, request); err != nil {
@@ -178,7 +198,9 @@ func TestStalledRequestBodyIsBoundedByUpstreamTimeout(t *testing.T) {
 	}
 	var body map[string]string
 	err = json.NewDecoder(response.Body).Decode(&body)
-	response.Body.Close()
+	if closeErr := response.Body.Close(); closeErr != nil {
+		t.Errorf("close timeout response: %v", closeErr)
+	}
 	if err != nil || response.StatusCode != http.StatusGatewayTimeout || body["code"] != "UpstreamTimeout" || body["outcome"] != "unknown" {
 		t.Fatalf("response: %d %v %v", response.StatusCode, body, err)
 	}
@@ -193,12 +215,17 @@ func TestTimeoutKeepsClientConnectionUsable(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			var calls atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.ReadAll(r.Body)
+				if _, err := io.ReadAll(r.Body); err != nil {
+					t.Errorf("read upstream body: %v", err)
+					return
+				}
 				if calls.Add(1) == 1 {
 					<-r.Context().Done()
 					return
 				}
-				_, _ = io.WriteString(w, "ok")
+				if _, err := io.WriteString(w, "ok"); err != nil {
+					t.Errorf("write upstream response: %v", err)
+				}
 			}))
 			defer upstream.Close()
 			front := httptest.NewServer(gateway(t, upstream.URL, unusedUpstream(t), "100ms"))
@@ -210,13 +237,20 @@ func TestTimeoutKeepsClientConnectionUsable(t *testing.T) {
 				if method == http.MethodPost {
 					body = strings.NewReader(`{}`)
 				}
-				request, _ := http.NewRequest(method, front.URL+"/api/serving/menu", body)
+				request, err := http.NewRequest(method, front.URL+"/api/serving/menu", body)
+				if err != nil {
+					t.Fatal(err)
+				}
 				response, err := front.Client().Do(request)
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, _ = io.Copy(io.Discard, response.Body)
-				response.Body.Close()
+				if _, err := io.Copy(io.Discard, response.Body); err != nil {
+					t.Errorf("read response body: %v", err)
+				}
+				if err := response.Body.Close(); err != nil {
+					t.Errorf("close response body: %v", err)
+				}
 				if response.StatusCode != want {
 					t.Fatalf("request %d: %d, want %d", i+1, response.StatusCode, want)
 				}
@@ -229,7 +263,10 @@ func TestClientCancellationReachesUpstream(t *testing.T) {
 	started, cancelled := make(chan struct{}), make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// net/http watches for a closed connection only after the body is consumed.
-		_, _ = io.ReadAll(r.Body)
+		if _, err := io.ReadAll(r.Body); err != nil {
+			t.Errorf("read upstream body: %v", err)
+			return
+		}
 		close(started)
 		select {
 		case <-r.Context().Done():
@@ -242,18 +279,46 @@ func TestClientCancellationReachesUpstream(t *testing.T) {
 	defer front.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, front.URL+"/api/serving/order-proposals", strings.NewReader(`{}`))
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, front.URL+"/api/serving/order-proposals", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	go func() {
 		<-started
 		cancel()
 	}()
 	if response, err := front.Client().Do(request); err == nil {
-		response.Body.Close()
+		if closeErr := response.Body.Close(); closeErr != nil {
+			t.Errorf("close response body: %v", closeErr)
+		}
 		t.Fatalf("request completed: %d", response.StatusCode)
 	}
 	select {
 	case <-cancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("client cancellation did not reach upstream")
+	}
+}
+
+type failingDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (writer failingDeadlineRecorder) SetReadDeadline(time.Time) error {
+	return writer.err
+}
+
+func TestReadDeadlineFailureDoesNotCallUpstream(t *testing.T) {
+	var calls int
+	app := withDeadline(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}), time.Second)
+	response := failingDeadlineRecorder{httptest.NewRecorder(), errors.New("fixture read deadline failure")}
+	app.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/serving/order-confirmations", strings.NewReader(`{}`)))
+	body := transportError(t, response.ResponseRecorder)
+	if calls != 0 || response.Code != http.StatusBadGateway || body["outcome"] != "unknown" {
+		t.Fatalf("calls=%d, response=%d %v", calls, response.Code, body)
 	}
 }

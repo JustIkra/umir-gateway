@@ -1,0 +1,35 @@
+version: 3
+workdir: .
+allow:
+  deepScan: false
+  depOnAnyVendor: false
+  ignoreNotFoundComponents: true
+components:
+  config: {in: "internal/config/**"}
+  httpapi: {in: "internal/httpapi/**"}
+  upstream: {in: "internal/adapters/httpupstream/**"}
+  proxy: {in: "internal/proxy/**"}
+  transport: {in: "internal/transport/**"}
+  bootstrap: {in: "bootstrap/**"}
+  process: {in: "cmd/**"}
+  testsupport: {in: "tests/testsupport/**"}
+  integration: {in: "tests/integration/**"}
+deps:
+  config:
+    mayDependOn: [config]
+  httpapi:
+    mayDependOn: [httpapi]
+  upstream:
+    mayDependOn: [upstream]
+  proxy:
+    mayDependOn: [proxy]
+  transport:
+    mayDependOn: [transport, proxy]
+  bootstrap:
+    mayDependOn: [bootstrap, transport, proxy]
+  process:
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy]
+  testsupport:
+    mayDependOn: [testsupport]
+  integration:
+    mayDependOn: [integration, bootstrap, transport, proxy, testsupport]

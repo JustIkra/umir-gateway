@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -52,20 +53,24 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 		// the server already reads their connection in the background, and a read error there
 		// cancels the context of every later request on the connection.
 		if r.Body != http.NoBody {
-			// The net/http server supports read deadlines, so the error is not checked.
-			_ = http.NewResponseController(w).SetReadDeadline(deadline)
+			if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				httpapi.WriteTransportError(w, r, err)
+				return
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func healthcheck(port string) error {
+func healthcheck(port string) (result error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() {
+		result = errors.Join(result, response.Body.Close())
+	}()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("health status: %d", response.StatusCode)
 	}
@@ -104,7 +109,7 @@ func main() {
 		}
 	}()
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

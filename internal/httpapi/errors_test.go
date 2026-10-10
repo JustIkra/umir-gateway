@@ -66,7 +66,9 @@ func TestWriteTransportErrorAfterSpentBudgetIsTimeout(t *testing.T) {
 	WriteTransportError(response, request, context.Canceled)
 
 	var body map[string]string
-	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
 	if response.Code != http.StatusGatewayTimeout || body["code"] != "UpstreamTimeout" || body["outcome"] != "unknown" {
 		t.Fatalf("response: %d %v", response.Code, body)
 	}

@@ -29,5 +29,7 @@ func WriteTransportError(w http.ResponseWriter, r *http.Request, err error) {
 	log.Printf("upstream %s %s: %s: %v", r.Method, r.URL.Path, code, err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message, "outcome": outcome})
+	if encodeErr := json.NewEncoder(w).Encode(map[string]string{"code": code, "message": message, "outcome": outcome}); encodeErr != nil {
+		log.Printf("upstream error response: %v", encodeErr)
+	}
 }
