@@ -2,6 +2,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$root/.go-quality-versions"
+export GO_QUALITY_BIN="${GO_QUALITY_BIN:-$root/.cache/go-quality/bin}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/go-quality-fixtures.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 fixture="$scratch/project"
