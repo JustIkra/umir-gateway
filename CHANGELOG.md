@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve the original query string for service validation. Invalid escapes and semicolon parameters no longer disappear before reaching the strict HTTP adapter.
+
 - Response writes use the exchange deadline, including an earlier incoming deadline. A stalled reader no longer retains a proxy handler indefinitely. Transport-error JSON has a separate bounded 250 ms write allowance.
 - SIGTERM waits for active responses to drain before process exit. Failed shutdown closes the remaining connections and preserves the error.
 - Added real socket and child-process regressions for stalled writes, transport timeout responses, keepalive and graceful shutdown.
