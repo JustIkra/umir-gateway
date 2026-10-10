@@ -40,11 +40,21 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
 }
 
-// withDeadline bounds the whole upstream exchange; client cancellation still propagates.
+// withDeadline bounds the whole upstream exchange, including reading the client body;
+// client cancellation still propagates.
 func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		deadline := time.Now().Add(timeout)
+		ctx, cancel := context.WithDeadline(r.Context(), deadline)
 		defer cancel()
+		// The context cannot interrupt a blocked read of the client body, a read deadline can.
+		// The server clears it once the body is consumed. Requests without a body are skipped:
+		// the server already reads their connection in the background, and a read error there
+		// cancels the context of every later request on the connection.
+		if r.Body != http.NoBody {
+			// The net/http server supports read deadlines, so the error is not checked.
+			_ = http.NewResponseController(w).SetReadDeadline(deadline)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

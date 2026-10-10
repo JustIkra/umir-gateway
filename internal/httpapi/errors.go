@@ -7,14 +7,18 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 )
 
 // WriteTransportError answers when no upstream response was received.
 // A write request may still have been recorded upstream, so its outcome is unknown.
 func WriteTransportError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := http.StatusBadGateway, "UpstreamUnavailable", "upstream service did not respond"
+	// A spent budget cancels the exchange from several places, so err may be a plain cancellation.
+	deadline, budgeted := r.Context().Deadline()
+	budgetSpent := budgeted && !time.Now().Before(deadline)
 	var netErr net.Error
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+	if budgetSpent || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		status, code, message = http.StatusGatewayTimeout, "UpstreamTimeout", "upstream service did not respond in time"
 	}
 	outcome := "unknown"

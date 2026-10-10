@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,6 +147,81 @@ func TestSlowUpstreamTimesOutAndIsCancelled(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("upstream request was not cancelled")
+	}
+}
+
+func TestStalledRequestBodyIsBoundedByUpstreamTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+	}))
+	defer upstream.Close()
+	front := httptest.NewServer(gateway(t, upstream.URL, unusedUpstream(t), "100ms"))
+	defer front.Close()
+
+	conn, err := net.Dial("tcp", front.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Far beyond the budget: an unbounded body read fails here instead of hanging the test.
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	// Content-Length promises two bytes; the client sends one and stalls.
+	request := "POST /api/serving/order-confirmations HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{"
+	if _, err := io.WriteString(conn, request); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("no response within the budget: %v", err)
+	}
+	var body map[string]string
+	err = json.NewDecoder(response.Body).Decode(&body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusGatewayTimeout || body["code"] != "UpstreamTimeout" || body["outcome"] != "unknown" {
+		t.Fatalf("response: %d %v %v", response.StatusCode, body, err)
+	}
+	// The unread rest of the body must not be parsed as the next request on this connection.
+	if rest, err := io.ReadAll(reader); len(rest) != 0 || err != nil {
+		t.Fatalf("connection was not closed: %q %v", rest, err)
+	}
+}
+
+func TestTimeoutKeepsClientConnectionUsable(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.ReadAll(r.Body)
+				if calls.Add(1) == 1 {
+					<-r.Context().Done()
+					return
+				}
+				_, _ = io.WriteString(w, "ok")
+			}))
+			defer upstream.Close()
+			front := httptest.NewServer(gateway(t, upstream.URL, unusedUpstream(t), "100ms"))
+			defer front.Close()
+
+			// The second request reuses the keep-alive connection of the timed out one.
+			for i, want := range []int{http.StatusGatewayTimeout, http.StatusOK} {
+				var body io.Reader
+				if method == http.MethodPost {
+					body = strings.NewReader(`{}`)
+				}
+				request, _ := http.NewRequest(method, front.URL+"/api/serving/menu", body)
+				response, err := front.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = io.Copy(io.Discard, response.Body)
+				response.Body.Close()
+				if response.StatusCode != want {
+					t.Fatalf("request %d: %d, want %d", i+1, response.StatusCode, want)
+				}
+			}
+		})
 	}
 }
 
