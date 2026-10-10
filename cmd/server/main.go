@@ -46,14 +46,22 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := time.Now().Add(timeout)
+		if parentDeadline, ok := r.Context().Deadline(); ok && parentDeadline.Before(deadline) {
+			deadline = parentDeadline
+		}
 		ctx, cancel := context.WithDeadline(r.Context(), deadline)
 		defer cancel()
+		controller := http.NewResponseController(w)
+		if err := controller.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			httpapi.WriteTransportError(w, r, err)
+			return
+		}
 		// The context cannot interrupt a blocked read of the client body, a read deadline can.
 		// The server clears it once the body is consumed. Requests without a body are skipped:
 		// the server already reads their connection in the background, and a read error there
 		// cancels the context of every later request on the connection.
 		if r.Body != http.NoBody {
-			if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 				httpapi.WriteTransportError(w, r, err)
 				return
 			}
@@ -100,16 +108,32 @@ func main() {
 	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-signals.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("shutdown: %v", err)
-		}
-	}()
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := runServer(signals, server); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runServer(ctx context.Context, server *http.Server) error {
+	served := make(chan error, 1)
+	go func() { served <- server.ListenAndServe() }()
+	select {
+	case err := <-served:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	shutdownErr := server.Shutdown(shutdownContext)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(shutdownErr, server.Close())
+	}
+	serveErr := <-served
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	return errors.Join(shutdownErr, serveErr)
 }

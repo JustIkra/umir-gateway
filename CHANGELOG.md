@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Response writes use the exchange deadline, including an earlier incoming deadline. A stalled reader no longer retains a proxy handler indefinitely. Transport-error JSON has a separate bounded 250 ms write allowance.
+- SIGTERM waits for active responses to drain before process exit. Failed shutdown closes the remaining connections and preserves the error.
+- Added real socket and child-process regressions for stalled writes, transport timeout responses, keepalive and graceful shutdown.
+
 - Router и прокси разделены на `internal/config`, `internal/httpapi` и `internal/adapters/httpupstream` с внедряемыми `http.Handler` и `http.RoundTripper`.
 - Добавлены `UPSTREAM_TIMEOUT` и JSON собственной транспортной ошибки с `outcome` `unknown`/`unavailable`. Бюджет ограничивает и приём тела запроса от клиента.
 - Тесты покрывают потерю ответа после записи, таймаут, остановку передачи тела клиентом, отмену клиентом, escaped path/query и большие десятичные строки.
