@@ -5,14 +5,36 @@
 ## Текущее состояние
 
 Работают `GET /healthz`, проверка контейнера `/server healthcheck` и HTTP-прокси.
-Тесты проверяют выбор upstream, передачу метода, пути, query, тела и ответа, а также отклонение неверного upstream URL.
+Gateway не содержит бизнес-правил: он не создаёт `commandID`, не проверяет тела и не повторяет запросы.
 
 | Входной путь | Путь на upstream |
 | --- | --- |
 | `/api/serving/healthz` | `serving:8080/healthz` |
 | `/api/warehouse/healthz` | `warehouse:8080/healthz` |
+| `/api/serving/<path>` | `serving:8080/<path>` |
+| `/api/warehouse/<path>` | `warehouse:8080/<path>` |
 
-Префиксы `/api/serving` и `/api/warehouse` снимаются при передаче запроса. Бизнес-endpoints ещё предстоит реализовать в соответствующих сервисах.
+Префиксы `/api/serving` и `/api/warehouse` снимаются при передаче запроса. Метод, остальной путь, query, тело, end-to-end заголовки, статус и тело ответа upstream передаются без изменений; hop-by-hop заголовки удаляются, `X-Forwarded-*` выставляет gateway. Query с `;` или некорректным `%`-кодированием `httputil.ReverseProxy` перекодирует. Бизнес-endpoints ещё предстоит реализовать в соответствующих сервисах.
+
+## Структура
+
+| Пакет | Ответственность |
+| --- | --- |
+| `cmd/server` | Чтение настроек, сборка прокси и router, ограничение времени upstream, lifecycle и `healthcheck`. |
+| `internal/config` | Проверка `PORT`, `SERVING_URL`, `WAREHOUSE_URL`, `UPSTREAM_TIMEOUT`. |
+| `internal/httpapi` | `NewRouter(Upstreams)` над внедрёнными `http.Handler`, `/healthz`, JSON транспортной ошибки. |
+| `internal/adapters/httpupstream` | `NewProxy(target, http.RoundTripper)` — `ReverseProxy` с внедрённым transport. |
+
+## Собственные ошибки gateway
+
+Ответ upstream, включая 4xx/5xx и 202, передаётся без изменений. Собственный JSON `{code, message, outcome}` gateway возвращает, только если ответ upstream не получен:
+
+| Ситуация | Статус | `code` | `outcome` |
+| --- | --- | --- | --- |
+| Upstream недоступен или соединение оборвано до ответа | 502 | `UpstreamUnavailable` | `unknown` для изменяющих методов, `unavailable` для GET/HEAD/OPTIONS |
+| Истёк `UPSTREAM_TIMEOUT`, в том числе пока клиент передаёт тело запроса | 504 | `UpstreamTimeout` | то же |
+
+`unknown` означает, что запись могла произойти: исход устанавливает сервис-владелец, а клиент повторяет ту же попытку с тем же `commandID`. Обрыв после начала передачи тела ответа прерывает соединение клиента. Если бюджет истёк до получения всего тела запроса, gateway отвечает 504 и закрывает соединение. Внутренние адреса upstream пишутся только в лог.
 
 ## Разработка
 
@@ -35,7 +57,10 @@ docker compose up --build -d --wait
 | `PORT` | `8080` |
 | `SERVING_URL` | `http://serving:8080` |
 | `WAREHOUSE_URL` | `http://warehouse:8080` |
+| `UPSTREAM_TIMEOUT` | `15s`; общий бюджет на приём тела запроса от клиента и обмен с upstream, формат Go duration |
 | `TZ` в контейнере | `Europe/Moscow` |
+
+URL upstream принимаются только `http(s)` с хостом, без учётных данных, query и fragment; неверная настройка останавливает запуск. Переменные `HTTP_PROXY`/`HTTPS_PROXY` к upstream не применяются.
 
 Отдельный Compose публикует `127.0.0.1:18081`. Для доступа к upstream по именам serving и warehouse используйте [общую сборку фабрики](https://github.com/JustIkra/umir-factory#readme).
 В фабрике gateway по умолчанию доступен на `127.0.0.1:8081`; frontend также передаёт ему запросы `/api/`.

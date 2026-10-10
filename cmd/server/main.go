@@ -2,55 +2,66 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
+	"github.com/JustIkra/umir-gateway/internal/config"
+	"github.com/JustIkra/umir-gateway/internal/httpapi"
 )
 
-func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+// newHandler assembles the gateway: one proxy per upstream behind the router.
+func newHandler(cfg config.Config) (http.Handler, error) {
+	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
+	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
+	upstream := func(target *url.URL) (http.Handler, error) {
+		proxy, err := httpupstream.NewProxy(target, transport)
+		if err != nil {
+			return nil, err
+		}
+		proxy.ErrorHandler = httpapi.WriteTransportError
+		return withDeadline(proxy, cfg.UpstreamTimeout), nil
 	}
-	return fallback
+	serving, err := upstream(cfg.ServingURL)
+	if err != nil {
+		return nil, fmt.Errorf("serving: %w", err)
+	}
+	warehouse, err := upstream(cfg.WarehouseURL)
+	if err != nil {
+		return nil, fmt.Errorf("warehouse: %w", err)
+	}
+	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
 }
 
-func handler() (http.Handler, error) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "umir-gateway"})
+// withDeadline bounds the whole upstream exchange, including reading the client body;
+// client cancellation still propagates.
+func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadline := time.Now().Add(timeout)
+		ctx, cancel := context.WithDeadline(r.Context(), deadline)
+		defer cancel()
+		// The context cannot interrupt a blocked read of the client body, a read deadline can.
+		// The server clears it once the body is consumed. Requests without a body are skipped:
+		// the server already reads their connection in the background, and a read error there
+		// cancels the context of every later request on the connection.
+		if r.Body != http.NoBody {
+			// The net/http server supports read deadlines, so the error is not checked.
+			_ = http.NewResponseController(w).SetReadDeadline(deadline)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-	upstreams := []struct{ prefix, target string }{
-		{"/api/serving/", env("SERVING_URL", "http://serving:8080")},
-		{"/api/warehouse/", env("WAREHOUSE_URL", "http://warehouse:8080")},
-	}
-	for _, upstream := range upstreams {
-		target, err := url.Parse(upstream.target)
-		if err != nil || target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
-			return nil, fmt.Errorf("invalid upstream for %s", upstream.prefix)
-		}
-		proxy := &httputil.ReverseProxy{
-			Rewrite: func(request *httputil.ProxyRequest) {
-				request.SetURL(target)
-				request.SetXForwarded()
-			},
-		}
-		mux.Handle(upstream.prefix, http.StripPrefix(upstream.prefix[:len(upstream.prefix)-1], proxy))
-	}
-	return mux, nil
 }
 
-func healthcheck() error {
+func healthcheck(port string) error {
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://127.0.0.1:" + env("PORT", "8080") + "/healthz")
+	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
 	if err != nil {
 		return err
 	}
@@ -62,18 +73,22 @@ func healthcheck() error {
 }
 
 func main() {
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
-		if err := healthcheck(); err != nil {
+		if err := healthcheck(cfg.Port); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	app, err := handler()
+	app, err := newHandler(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	server := &http.Server{
-		Addr:              ":" + env("PORT", "8080"),
+		Addr:              ":" + cfg.Port,
 		Handler:           app,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
