@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -106,8 +107,14 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestGatewayChildProcess$")
-	child.Env = append(os.Environ(), "UMIR_GATEWAY_TEST_CHILD=1", "PORT="+port,
-		"SERVING_URL="+upstream.URL, "WAREHOUSE_URL="+upstream.URL, "UPSTREAM_TIMEOUT=5s")
+	child.Env = childEnvironment(map[string]string{
+		"UMIR_GATEWAY_TEST_CHILD": "1",
+		"PORT":                    port,
+		"SERVING_URL":             upstream.URL,
+		"WAREHOUSE_URL":           upstream.URL,
+		"UPSTREAM_TIMEOUT":        "5s",
+		"GORACE":                  "atexit_sleep_ms=0",
+	})
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +186,20 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("gateway did not exit after draining")
 	}
+}
+
+func childEnvironment(overrides map[string]string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrides[key]; !replaced {
+			environment = append(environment, entry)
+		}
+	}
+	for key, value := range overrides {
+		environment = append(environment, key+"="+value)
+	}
+	return environment
 }
 
 func waitChildHealthy(t *testing.T, address string, exited <-chan error) {
