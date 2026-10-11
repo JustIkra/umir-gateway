@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,6 +63,30 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	})
 }
 
+// shutdownGrace bounds how long active requests may finish after a stop signal.
+const shutdownGrace = 10 * time.Second
+
+// run serves until ctx is done, then waits for active requests to finish.
+func run(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case err := <-served:
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		// The grace period is over: close the remaining connections before exiting.
+		return errors.Join(fmt.Errorf("graceful shutdown: %w", err), server.Close())
+	}
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
 func healthcheck(port string) (result error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
@@ -100,16 +125,12 @@ func main() {
 	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-signals.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("shutdown: %v", err)
-		}
-	}()
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := run(signals, server, listener, shutdownGrace); err != nil {
 		log.Fatal(err)
 	}
 }
