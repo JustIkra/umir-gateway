@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,37 +42,59 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
 }
 
-// newServer applies the process timeouts to the gateway handler.
-func newServer(cfg config.Config, handler http.Handler) *http.Server {
-	return &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		// A client that stops reading cannot hold the handler and connection past this bound.
-		WriteTimeout: cfg.WriteTimeout,
-		IdleTimeout:  60 * time.Second,
-	}
-}
-
 // withDeadline bounds the whole upstream exchange, including reading the client body;
 // client cancellation still propagates.
 func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := time.Now().Add(timeout)
+		if parentDeadline, ok := r.Context().Deadline(); ok && parentDeadline.Before(deadline) {
+			deadline = parentDeadline
+		}
 		ctx, cancel := context.WithDeadline(r.Context(), deadline)
 		defer cancel()
+		controller := http.NewResponseController(w)
+		if err := controller.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			httpapi.WriteTransportError(w, r, err)
+			return
+		}
 		// The context cannot interrupt a blocked read of the client body, a read deadline can.
 		// The server clears it once the body is consumed. Requests without a body are skipped:
 		// the server already reads their connection in the background, and a read error there
 		// cancels the context of every later request on the connection.
 		if r.Body != http.NoBody {
-			if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 				httpapi.WriteTransportError(w, r, err)
 				return
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+const shutdownGrace = 10 * time.Second
+
+func run(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case err := <-served:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(fmt.Errorf("graceful shutdown: %w", shutdownErr), server.Close())
+	}
+	serveErr := <-served
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	return errors.Join(shutdownErr, serveErr)
 }
 
 func healthcheck(port string) (result error) {
@@ -104,19 +127,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := newServer(cfg, app)
+	server := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           app,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-signals.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("shutdown: %v", err)
-		}
-	}()
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := run(signals, server, listener, shutdownGrace); err != nil {
 		log.Fatal(err)
 	}
 }

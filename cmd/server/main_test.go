@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -298,6 +299,30 @@ func TestClientCancellationReachesUpstream(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("client cancellation did not reach upstream")
+	}
+}
+
+func TestMalformedQueryReachesServiceValidation(t *testing.T) {
+	for _, query := range []string{"unexpected=%ZZ", "dishID=d1&unexpected=%ZZ", "dishID=d1;unexpected=x"} {
+		t.Run(query, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.RawQuery != query {
+					t.Errorf("query changed before validation: got %q, want %q", r.URL.RawQuery, query)
+				}
+				if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer upstream.Close()
+			app := gateway(t, upstream.URL, upstream.URL, "")
+			response := httptest.NewRecorder()
+			app.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/serving/dish?"+query, nil))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid query was accepted after proxying: status %d", response.Code)
+			}
+		})
 	}
 }
 
