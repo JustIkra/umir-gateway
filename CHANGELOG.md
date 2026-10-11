@@ -4,6 +4,7 @@
 
 - Router и прокси разделены на `internal/config`, `internal/httpapi` и `internal/adapters/httpupstream` с внедряемыми `http.Handler` и `http.RoundTripper`.
 - Добавлены `UPSTREAM_TIMEOUT` и JSON собственной транспортной ошибки с `outcome` `unknown`/`unavailable`. Бюджет ограничивает и приём тела запроса от клиента.
+- Добавлен `WRITE_TIMEOUT` (по умолчанию `UPSTREAM_TIMEOUT` + 5s): клиент, переставший читать ответ, больше не удерживает обработчик и соединение.
 - Тесты покрывают потерю ответа после записи, таймаут, остановку передачи тела клиентом, отмену клиентом, escaped path/query и большие десятичные строки.
 - Quality checks reject unsupported nested modules and support library-only builds without source-tree executables.
 

@@ -27,6 +27,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.UpstreamTimeout != 15*time.Second {
 		t.Errorf("timeout: %s", cfg.UpstreamTimeout)
 	}
+	if cfg.WriteTimeout != 20*time.Second {
+		t.Errorf("write timeout: %s", cfg.WriteTimeout)
+	}
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
@@ -35,14 +38,25 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		"SERVING_URL":      "http://127.0.0.1:18082",
 		"WAREHOUSE_URL":    "https://warehouse.internal:8443/base",
 		"UPSTREAM_TIMEOUT": "2500ms",
+		"WRITE_TIMEOUT":    "4s",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Port != "18081" || cfg.ServingURL.Host != "127.0.0.1:18082" ||
 		cfg.WarehouseURL.String() != "https://warehouse.internal:8443/base" ||
-		cfg.UpstreamTimeout != 2500*time.Millisecond {
+		cfg.UpstreamTimeout != 2500*time.Millisecond || cfg.WriteTimeout != 4*time.Second {
 		t.Fatalf("config: %+v", cfg)
+	}
+}
+
+func TestLoadDerivesWriteTimeoutFromUpstreamTimeout(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"UPSTREAM_TIMEOUT": "2500ms"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WriteTimeout != 7500*time.Millisecond {
+		t.Fatalf("write timeout: %s", cfg.WriteTimeout)
 	}
 }
 
@@ -61,6 +75,14 @@ func TestLoadRejectsInvalidSettings(t *testing.T) {
 		{"UPSTREAM_TIMEOUT", "15"},
 		{"UPSTREAM_TIMEOUT", "0s"},
 		{"UPSTREAM_TIMEOUT", "-1s"},
+		// The derived write timeout would overflow time.Duration.
+		{"UPSTREAM_TIMEOUT", "2562047h47m16.854775807s"},
+		{"WRITE_TIMEOUT", "20"},
+		{"WRITE_TIMEOUT", "0s"},
+		{"WRITE_TIMEOUT", "-1s"},
+		// The response must outlive the default 15s upstream budget.
+		{"WRITE_TIMEOUT", "15s"},
+		{"WRITE_TIMEOUT", "10s"},
 	} {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
 			_, err := Load(env(map[string]string{tc.key: tc.value}))

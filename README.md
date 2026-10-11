@@ -69,7 +69,10 @@ docker compose up --build -d --wait
 | `SERVING_URL` | `http://serving:8080` |
 | `WAREHOUSE_URL` | `http://warehouse:8080` |
 | `UPSTREAM_TIMEOUT` | `15s`; общий бюджет на приём тела запроса от клиента и обмен с upstream, формат Go duration |
+| `WRITE_TIMEOUT` | `UPSTREAM_TIMEOUT` + `5s`; срок передачи ответа клиенту с момента получения заголовков запроса, должен быть больше `UPSTREAM_TIMEOUT` |
 | `TZ` в контейнере | `Europe/Moscow` |
+
+`WRITE_TIMEOUT` не отменяет upstream: обмен с ним ограничивает `UPSTREAM_TIMEOUT`, а запас после него оставлен для собственного ответа 504. Клиент, который перестал читать ответ, удерживает обработчик и соединение не дольше `WRITE_TIMEOUT`.
 
 URL upstream принимаются только `http(s)` с хостом, без учётных данных, query и fragment; неверная настройка останавливает запуск. Переменные `HTTP_PROXY`/`HTTPS_PROXY` к upstream не применяются.
 

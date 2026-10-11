@@ -41,6 +41,18 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
 }
 
+// newServer applies the process timeouts to the gateway handler.
+func newServer(cfg config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		// A client that stops reading cannot hold the handler and connection past this bound.
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  60 * time.Second,
+	}
+}
+
 // withDeadline bounds the whole upstream exchange, including reading the client body;
 // client cancellation still propagates.
 func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
@@ -92,12 +104,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           app,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	server := newServer(cfg, app)
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
