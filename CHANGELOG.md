@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Обновлены закреплённые GitHub Actions до выпусков с поддержкой Node.js 24.
+- Обновлены минимальная версия Go и builder image до 1.26.9 для получения актуальных исправлений безопасности стандартной библиотеки.
 - Preserve the original query string for service validation. Invalid escapes and semicolon parameters no longer disappear before reaching the strict HTTP adapter.
 
 - Response writes use the exchange deadline, including an earlier incoming deadline. A stalled reader no longer retains a proxy handler indefinitely. Transport-error JSON has a separate bounded 250 ms write allowance.
