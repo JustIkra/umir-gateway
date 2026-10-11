@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
@@ -30,8 +31,9 @@ type Options struct {
 	Validate func(operator.Account) error
 }
 
-// Store owns the account file.
+// Store replaces the account file; it serializes its own writes.
 type Store struct {
+	mu      sync.Mutex
 	path    string
 	dir     string
 	fs      fileSystem
@@ -166,24 +168,70 @@ func rejectDuplicateKeys(data []byte) error {
 	return nil
 }
 
-// write commits data through a temporary file and an atomic rename.
-func (s *Store) write(data []byte) error {
-	temp, err := s.fs.CreateTemp(s.dir)
+// Replace commits next as the whole account file. A failure known to precede the commit wraps
+// operator.ErrStorageUnavailable; any failure after the commit point wraps operator.ErrUpdateOutcomeUnknown.
+func (s *Store) Replace(next operator.Account) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := encode(next)
 	if err != nil {
 		return err
 	}
-	err = temp.Chmod(0o600)
+	if err := s.write(data); err != nil {
+		return err
+	}
+	s.current = data
+	return nil
+}
+
+// write follows: unique temp file, mode 0600, full content, flush, rename, directory flush, re-read.
+func (s *Store) write(data []byte) error {
+	temp, err := s.fs.CreateTemp(s.dir)
+	if err != nil {
+		return definite("create temporary file", err)
+	}
+	if err := fill(temp, data); err != nil {
+		return errors.Join(definite("write temporary file", err), s.fs.Remove(temp.Name()))
+	}
+	if err := s.fs.Rename(temp.Name(), s.path); err != nil {
+		removeErr := s.fs.Remove(temp.Name())
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+		// rename(2) normally leaves the target untouched on error; confirm before calling it definite.
+		if committed, readErr := s.fs.ReadFile(s.path); readErr == nil && s.current != nil && bytes.Equal(committed, s.current) {
+			return errors.Join(definite("replace account file", err), removeErr)
+		}
+		return ambiguous("replace account file", err)
+	}
+	if err := s.fs.SyncDir(s.dir); err != nil {
+		return ambiguous("flush account directory", err)
+	}
+	committed, err := s.fs.ReadFile(s.path)
+	if err != nil {
+		return ambiguous("re-read account file", err)
+	}
+	if !bytes.Equal(committed, data) {
+		return ambiguous("re-read account file", errors.New("content differs from the written document"))
+	}
+	return nil
+}
+
+func fill(temp tempFile, data []byte) error {
+	err := temp.Chmod(0o600)
 	if err == nil {
 		_, err = temp.Write(data)
 	}
 	if err == nil {
 		err = temp.Sync()
 	}
-	if err = errors.Join(err, temp.Close()); err != nil {
-		return errors.Join(err, s.fs.Remove(temp.Name()))
-	}
-	if err := s.fs.Rename(temp.Name(), s.path); err != nil {
-		return errors.Join(err, s.fs.Remove(temp.Name()))
-	}
-	return s.fs.SyncDir(s.dir)
+	return errors.Join(err, temp.Close())
+}
+
+func definite(step string, err error) error {
+	return fmt.Errorf("%w: %s: %w", operator.ErrStorageUnavailable, step, err)
+}
+
+func ambiguous(step string, err error) error {
+	return fmt.Errorf("%w: %s: %w", operator.ErrUpdateOutcomeUnknown, step, err)
 }
