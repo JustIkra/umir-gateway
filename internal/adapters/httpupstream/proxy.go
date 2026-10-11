@@ -21,6 +21,7 @@ func NewProxy(target *url.URL, transport http.RoundTripper) (*httputil.ReversePr
 	return &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(target)
+			request.Out.URL.RawQuery = request.In.URL.RawQuery
 			request.SetXForwarded()
 		},
 		Transport: transport,

@@ -47,14 +47,22 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := time.Now().Add(timeout)
+		if parentDeadline, ok := r.Context().Deadline(); ok && parentDeadline.Before(deadline) {
+			deadline = parentDeadline
+		}
 		ctx, cancel := context.WithDeadline(r.Context(), deadline)
 		defer cancel()
+		controller := http.NewResponseController(w)
+		if err := controller.SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			httpapi.WriteTransportError(w, r, err)
+			return
+		}
 		// The context cannot interrupt a blocked read of the client body, a read deadline can.
 		// The server clears it once the body is consumed. Requests without a body are skipped:
 		// the server already reads their connection in the background, and a read error there
 		// cancels the context of every later request on the connection.
 		if r.Body != http.NoBody {
-			if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 				httpapi.WriteTransportError(w, r, err)
 				return
 			}
@@ -72,19 +80,23 @@ func run(ctx context.Context, server *http.Server, listener net.Listener, grace 
 	go func() { served <- server.Serve(listener) }()
 	select {
 	case err := <-served:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		// The grace period is over: close the remaining connections before exiting.
-		return errors.Join(fmt.Errorf("graceful shutdown: %w", err), server.Close())
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(fmt.Errorf("graceful shutdown: %w", shutdownErr), server.Close())
 	}
-	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		return err
+	serveErr := <-served
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
 	}
-	return nil
+	return errors.Join(shutdownErr, serveErr)
 }
 
 func healthcheck(port string) (result error) {
