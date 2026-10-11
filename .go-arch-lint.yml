@@ -16,6 +16,7 @@ components:
   integration: {in: "tests/integration/**"}
   operator: {in: "internal/operator/**"}
   passwordhash: {in: "internal/adapters/argon2id/**"}
+  accountfile: {in: "internal/adapters/accountfile/**"}
 vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
@@ -33,7 +34,7 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile]
   testsupport:
     mayDependOn: [testsupport]
   integration:
@@ -44,3 +45,5 @@ deps:
   passwordhash:
     mayDependOn: [passwordhash]
     canUse: [x-crypto-argon2]
+  accountfile:
+    mayDependOn: [accountfile, operator]
