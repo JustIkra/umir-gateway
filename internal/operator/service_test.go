@@ -194,18 +194,21 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 		return Options{
 			Store: &fakeStore{}, Hasher: &fakeHasher{}, Now: time.Now, NewToken: (&tokens{}).New,
 			IdleTimeout: DefaultIdleTimeout, AbsoluteTimeout: DefaultAbsoluteTimeout, MaxSessions: DefaultMaxSessions,
+			MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
 		}
 	}
 	for name, change := range map[string]func(*Options, *Account){
-		"store":       func(o *Options, _ *Account) { o.Store = nil },
-		"hasher":      func(o *Options, _ *Account) { o.Hasher = nil },
-		"clock":       func(o *Options, _ *Account) { o.Now = nil },
-		"tokens":      func(o *Options, _ *Account) { o.NewToken = nil },
-		"idle":        func(o *Options, _ *Account) { o.IdleTimeout = 0 },
-		"absolute":    func(o *Options, _ *Account) { o.AbsoluteTimeout = 0 },
-		"sessions":    func(o *Options, _ *Account) { o.MaxSessions = 0 },
-		"account":     func(_ *Options, a *Account) { a.CredentialVersion = 0 },
-		"hash format": func(_ *Options, a *Account) { a.PasswordHash = "plain" },
+		"store":           func(o *Options, _ *Account) { o.Store = nil },
+		"hasher":          func(o *Options, _ *Account) { o.Hasher = nil },
+		"clock":           func(o *Options, _ *Account) { o.Now = nil },
+		"tokens":          func(o *Options, _ *Account) { o.NewToken = nil },
+		"idle":            func(o *Options, _ *Account) { o.IdleTimeout = 0 },
+		"absolute":        func(o *Options, _ *Account) { o.AbsoluteTimeout = 0 },
+		"sessions":        func(o *Options, _ *Account) { o.MaxSessions = 0 },
+		"anonymous bound": func(o *Options, _ *Account) { o.MaxAnonymous = 0 },
+		"anonymous ttl":   func(o *Options, _ *Account) { o.AnonymousTTL = 0 },
+		"account":         func(_ *Options, a *Account) { a.CredentialVersion = 0 },
+		"hash format":     func(_ *Options, a *Account) { a.PasswordHash = "plain" },
 	} {
 		opts, account := valid(), testAccount()
 		change(&opts, &account)

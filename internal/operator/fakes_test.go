@@ -109,6 +109,7 @@ func newFixture(t *testing.T, change func(*Options)) fixture {
 	opts := Options{
 		Store: f.store, Hasher: f.hasher, Now: f.clock.Now, NewToken: ids.New,
 		IdleTimeout: DefaultIdleTimeout, AbsoluteTimeout: DefaultAbsoluteTimeout, MaxSessions: DefaultMaxSessions,
+		MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
 	}
 	if change != nil {
 		change(&opts)

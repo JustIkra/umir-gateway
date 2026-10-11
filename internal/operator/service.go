@@ -15,6 +15,9 @@ const (
 	DefaultIdleTimeout     = 30 * time.Minute
 	DefaultAbsoluteTimeout = 8 * time.Hour
 	DefaultMaxSessions     = 32
+	// The anonymous bound and lifetime are implementation defaults, not gateway#8 values.
+	DefaultMaxAnonymous = 1024
+	DefaultAnonymousTTL = 30 * time.Minute
 )
 
 var (
@@ -33,6 +36,8 @@ type Options struct {
 	IdleTimeout     time.Duration
 	AbsoluteTimeout time.Duration
 	MaxSessions     int
+	MaxAnonymous    int
+	AnonymousTTL    time.Duration
 }
 
 // Session is what the HTTP layer needs about an authenticated session.
@@ -63,13 +68,14 @@ type Service struct {
 	account    Account
 	recovering bool
 	sessions   map[string]*session
+	anonymous  map[string]*anonymousContext
 }
 
 func NewService(account Account, opts Options) (*Service, error) {
 	if opts.Store == nil || opts.Hasher == nil || opts.Now == nil || opts.NewToken == nil {
 		return nil, errors.New("operator: store, hasher, clock and token source are required")
 	}
-	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.MaxSessions <= 0 {
+	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.MaxSessions <= 0 || opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 {
 		return nil, errors.New("operator: session timeouts and bound must be positive")
 	}
 	if err := ValidateAccount(account); err != nil {
@@ -91,6 +97,7 @@ func NewService(account Account, opts Options) (*Service, error) {
 		dummyHash: dummyHash,
 		account:   account,
 		sessions:  make(map[string]*session),
+		anonymous: make(map[string]*anonymousContext),
 	}, nil
 }
 
