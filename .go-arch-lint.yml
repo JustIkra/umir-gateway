@@ -14,6 +14,9 @@ components:
   process: {in: "cmd/**"}
   testsupport: {in: "tests/testsupport/**"}
   integration: {in: "tests/integration/**"}
+  operator: {in: "internal/operator/**"}
+vendors:
+  x-text-norm: {in: "golang.org/x/text/unicode/norm"}
 deps:
   config:
     mayDependOn: [config]
@@ -28,8 +31,11 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator]
   testsupport:
     mayDependOn: [testsupport]
   integration:
     mayDependOn: [integration, bootstrap, transport, proxy, testsupport]
+  operator:
+    mayDependOn: [operator]
+    canUse: [x-text-norm]
