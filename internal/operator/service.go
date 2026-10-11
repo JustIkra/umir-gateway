@@ -38,6 +38,13 @@ type Options struct {
 	MaxSessions     int
 	MaxAnonymous    int
 	AnonymousTTL    time.Duration
+	// MaxVerifications bounds concurrent Argon2id work; MaxQueuedLogins bounds logins waiting for it.
+	MaxVerifications int
+	MaxQueuedLogins  int
+	// FailureLimit failed logins within FailureWindow start a Cooldown for every login.
+	FailureLimit  int
+	FailureWindow time.Duration
+	Cooldown      time.Duration
 }
 
 // Session is what the HTTP layer needs about an authenticated session.
@@ -63,20 +70,23 @@ type Service struct {
 	opts Options
 	// dummyHash is verified for an unknown login, so it costs the same as checking the real account.
 	dummyHash string
+	gate      *verificationGate
 
 	mu         sync.Mutex
 	account    Account
 	recovering bool
 	sessions   map[string]*session
 	anonymous  map[string]*anonymousContext
+	throttle   loginThrottle
 }
 
 func NewService(account Account, opts Options) (*Service, error) {
 	if opts.Store == nil || opts.Hasher == nil || opts.Now == nil || opts.NewToken == nil {
 		return nil, errors.New("operator: store, hasher, clock and token source are required")
 	}
-	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.MaxSessions <= 0 || opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 {
-		return nil, errors.New("operator: session timeouts and bound must be positive")
+	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.MaxSessions <= 0 || opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 ||
+		opts.MaxVerifications <= 0 || opts.MaxQueuedLogins <= 0 || opts.FailureLimit <= 0 || opts.FailureWindow <= 0 || opts.Cooldown <= 0 {
+		return nil, errors.New("operator: session timeouts and bounds must be positive")
 	}
 	if err := ValidateAccount(account); err != nil {
 		return nil, err
@@ -98,6 +108,8 @@ func NewService(account Account, opts Options) (*Service, error) {
 		account:   account,
 		sessions:  make(map[string]*session),
 		anonymous: make(map[string]*anonymousContext),
+		gate:      newVerificationGate(opts.MaxVerifications, opts.MaxQueuedLogins),
+		throttle:  loginThrottle{failures: make([]time.Time, 0, opts.FailureLimit)},
 	}, nil
 }
 
@@ -110,10 +122,15 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 		s.mu.Unlock()
 		return Profile{}, Session{}, ErrAuthUnavailable
 	}
+	if wait := s.cooldownLocked(s.opts.Now()); wait > 0 {
+		s.mu.Unlock()
+		return Profile{}, Session{}, rateLimited(wait)
+	}
 	snapshot := s.account
 	s.mu.Unlock()
 
 	if !utf8.ValidString(password) || utf8.RuneCountInString(password) > maxPassword {
+		s.recordFailure()
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
 	loginOK := subtle.ConstantTimeCompare([]byte(login), []byte(snapshot.Login)) == 1
@@ -121,11 +138,12 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 	if loginOK {
 		encoded = snapshot.PasswordHash
 	}
-	passwordOK, err := s.verify(ctx, password, encoded)
+	passwordOK, err := s.verifyLogin(ctx, password, encoded)
 	if err != nil {
 		return Profile{}, Session{}, err
 	}
 	if !passwordOK || !loginOK {
+		s.recordFailure()
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
 	if err := ctx.Err(); err != nil {
@@ -140,6 +158,7 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 	if s.account.CredentialVersion != snapshot.CredentialVersion {
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
+	s.throttle.failures = s.throttle.failures[:0]
 	if previousID != "" {
 		delete(s.sessions, previousID)
 	}
@@ -167,8 +186,22 @@ func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	return s.account.Profile(), s.view(id, st), nil
 }
 
-// verify runs one password check. Task 8 routes it through the verification gate.
-func (s *Service) verify(_ context.Context, password, encoded string) (bool, error) {
+// verifyLogin runs a login check through the bounded queue.
+func (s *Service) verifyLogin(ctx context.Context, password, encoded string) (bool, error) {
+	return s.check(ctx, true, password, encoded)
+}
+
+// verify runs a password-change check; it waits for a slot without the login queue bound.
+func (s *Service) verify(ctx context.Context, password, encoded string) (bool, error) {
+	return s.check(ctx, false, password, encoded)
+}
+
+func (s *Service) check(ctx context.Context, bounded bool, password, encoded string) (bool, error) {
+	release, err := s.gate.acquire(ctx, bounded)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	ok, err := s.opts.Hasher.Verify(password, encoded)
 	if err != nil {
 		return false, fmt.Errorf("verify password: %w", err)

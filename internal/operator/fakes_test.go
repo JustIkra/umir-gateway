@@ -110,6 +110,8 @@ func newFixture(t *testing.T, change func(*Options)) fixture {
 		Store: f.store, Hasher: f.hasher, Now: f.clock.Now, NewToken: ids.New,
 		IdleTimeout: DefaultIdleTimeout, AbsoluteTimeout: DefaultAbsoluteTimeout, MaxSessions: DefaultMaxSessions,
 		MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
+		MaxVerifications: DefaultMaxVerifications, MaxQueuedLogins: DefaultMaxQueuedLogins,
+		FailureLimit: DefaultFailureLimit, FailureWindow: DefaultFailureWindow, Cooldown: DefaultCooldown,
 	}
 	if change != nil {
 		change(&opts)

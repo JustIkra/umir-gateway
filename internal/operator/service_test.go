@@ -195,6 +195,8 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 			Store: &fakeStore{}, Hasher: &fakeHasher{}, Now: time.Now, NewToken: (&tokens{}).New,
 			IdleTimeout: DefaultIdleTimeout, AbsoluteTimeout: DefaultAbsoluteTimeout, MaxSessions: DefaultMaxSessions,
 			MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
+			MaxVerifications: DefaultMaxVerifications, MaxQueuedLogins: DefaultMaxQueuedLogins,
+			FailureLimit: DefaultFailureLimit, FailureWindow: DefaultFailureWindow, Cooldown: DefaultCooldown,
 		}
 	}
 	for name, change := range map[string]func(*Options, *Account){
@@ -207,6 +209,11 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 		"sessions":        func(o *Options, _ *Account) { o.MaxSessions = 0 },
 		"anonymous bound": func(o *Options, _ *Account) { o.MaxAnonymous = 0 },
 		"anonymous ttl":   func(o *Options, _ *Account) { o.AnonymousTTL = 0 },
+		"verifications":   func(o *Options, _ *Account) { o.MaxVerifications = 0 },
+		"queue":           func(o *Options, _ *Account) { o.MaxQueuedLogins = 0 },
+		"failure limit":   func(o *Options, _ *Account) { o.FailureLimit = 0 },
+		"failure window":  func(o *Options, _ *Account) { o.FailureWindow = 0 },
+		"cooldown":        func(o *Options, _ *Account) { o.Cooldown = 0 },
 		"account":         func(_ *Options, a *Account) { a.CredentialVersion = 0 },
 		"hash format":     func(_ *Options, a *Account) { a.PasswordHash = "plain" },
 	} {

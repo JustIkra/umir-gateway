@@ -82,8 +82,13 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	return nil
 }
 
-// hash creates the verifier for a new password. Task 8 routes it through the verification gate.
-func (s *Service) hash(_ context.Context, password string) (string, error) {
+// hash creates the verifier for a new password inside a verification slot.
+func (s *Service) hash(ctx context.Context, password string) (string, error) {
+	release, err := s.gate.acquire(ctx, false)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	return s.opts.Hasher.Hash(password)
 }
 
