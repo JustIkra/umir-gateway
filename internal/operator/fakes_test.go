@@ -129,3 +129,10 @@ func (f fixture) login(t *testing.T) Session {
 	}
 	return session
 }
+func (s *fakeStore) setErr(err error) { s.mu.Lock(); defer s.mu.Unlock(); s.err = err }
+
+func (s *fakeStore) calls() []Account {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Account(nil), s.replaced...)
+}
