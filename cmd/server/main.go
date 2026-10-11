@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -70,6 +71,32 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 	})
 }
 
+const shutdownGrace = 10 * time.Second
+
+func run(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case err := <-served:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(fmt.Errorf("graceful shutdown: %w", shutdownErr), server.Close())
+	}
+	serveErr := <-served
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	return errors.Join(shutdownErr, serveErr)
+}
+
 func healthcheck(port string) (result error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
@@ -108,32 +135,12 @@ func main() {
 	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := runServer(signals, server); err != nil {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-func runServer(ctx context.Context, server *http.Server) error {
-	served := make(chan error, 1)
-	go func() { served <- server.ListenAndServe() }()
-	select {
-	case err := <-served:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	case <-ctx.Done():
+	log.Printf("umir-gateway listening on %s", server.Addr)
+	if err := run(signals, server, listener, shutdownGrace); err != nil {
+		log.Fatal(err)
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	shutdownErr := server.Shutdown(shutdownContext)
-	if shutdownErr != nil {
-		shutdownErr = errors.Join(shutdownErr, server.Close())
-	}
-	serveErr := <-served
-	if errors.Is(serveErr, http.ErrServerClosed) {
-		serveErr = nil
-	}
-	return errors.Join(shutdownErr, serveErr)
 }

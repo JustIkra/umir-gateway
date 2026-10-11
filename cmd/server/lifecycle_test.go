@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -37,15 +36,9 @@ func TestStalledWriteUsesEarlierIncomingDeadline(t *testing.T) {
 
 func testStalledWrite(t *testing.T, timeout string, parentTimeout time.Duration) {
 	t.Helper()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Length", strconv.FormatInt(256<<20, 10))
-		if _, err := io.CopyN(w, streamReader{}, 256<<20); err != nil {
-			return
-		}
-	}))
-	defer upstream.Close()
+	upstreamURL, started, cancelled := largeUpstream(t, 256<<20)
 	done := make(chan struct{})
-	app := gateway(t, upstream.URL, upstream.URL, timeout)
+	app := gateway(t, upstreamURL, upstreamURL, timeout)
 	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer close(done)
 		if parentTimeout > 0 {
@@ -67,6 +60,16 @@ func testStalledWrite(t *testing.T, timeout string, parentTimeout time.Duration)
 	}()
 	if _, err := io.WriteString(conn, "GET /api/serving/large HTTP/1.1\r\nHost: gateway\r\n\r\n"); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream did not start in 2 seconds")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("upstream was not cancelled within the effective request budget")
 	}
 	select {
 	case <-done:
