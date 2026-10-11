@@ -96,6 +96,7 @@ func TestOpenRejectsMissingBootstrapWithoutCreatingFile(t *testing.T) {
 		"displayName":  {Login: "operator", PasswordHash: fakeHash},
 		"passwordHash": {Login: "operator", DisplayName: "Оператор"},
 		"invalid":      {Login: "operator", DisplayName: " Оператор", PasswordHash: fakeHash},
+		"hash byte":    {Login: "operator", DisplayName: "Оператор", PasswordHash: "$argon2id$v=19$\xff"},
 	} {
 		path := filepath.Join(accountDir(t), "account.json")
 		_, _, err := Open(path, bootstrap, testOptions())
@@ -114,16 +115,19 @@ func TestOpenRejectsMissingBootstrapWithoutCreatingFile(t *testing.T) {
 
 func TestOpenRejectsCorruptFileWithoutResetting(t *testing.T) {
 	for name, content := range map[string]string{
-		"invalid JSON":   `{"schemaVersion": 1,`,
-		"unknown field":  strings.Replace(validFile, `"credentialVersion"`, `"role": "admin", "credentialVersion"`, 1),
-		"duplicate key":  strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "credentialVersion": 4`, 1),
-		"trailing data":  validFile + "{}",
-		"schema 2":       strings.Replace(validFile, `"schemaVersion": 1`, `"schemaVersion": 2`, 1),
-		"missing schema": strings.Replace(validFile, `"schemaVersion": 1,`, ``, 1),
-		"invalid UTF-8":  strings.Replace(validFile, "Оператор", "Опе\xffратор", 1),
-		"version zero":   strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 0`, 1),
-		"not an object":  `[1]`,
-		"too large":      strings.Replace(validFile, "Оператор", strings.Repeat("я", maxFileSize), 1),
+		"invalid JSON":      `{"schemaVersion": 1,`,
+		"unknown field":     strings.Replace(validFile, `"credentialVersion"`, `"role": "admin", "credentialVersion"`, 1),
+		"duplicate key":     strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "credentialVersion": 4`, 1),
+		"trailing data":     validFile + "{}",
+		"schema 2":          strings.Replace(validFile, `"schemaVersion": 1`, `"schemaVersion": 2`, 1),
+		"missing schema":    strings.Replace(validFile, `"schemaVersion": 1,`, ``, 1),
+		"invalid UTF-8":     strings.Replace(validFile, "Оператор", "Опе\xffратор", 1),
+		"version zero":      strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 0`, 1),
+		"not an object":     `[1]`,
+		"case-variant key":  strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "LOGIN": "intruder"`, 1),
+		"case-variant only": strings.Replace(validFile, `"schemaVersion"`, `"SchemaVersion"`, 1),
+		"lone surrogate":    strings.Replace(validFile, "Оператор", `Опе\ud800ратор`, 1),
+		"too large":         strings.Replace(validFile, "Оператор", strings.Repeat("я", maxFileSize), 1),
 	} {
 		path := filepath.Join(accountDir(t), "account.json")
 		writeAccount(t, path, content)

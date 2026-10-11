@@ -36,7 +36,13 @@ func receive(t *testing.T, results <-chan error) error {
 func (s *Service) waitingForTest() int {
 	s.gate.mu.Lock()
 	defer s.gate.mu.Unlock()
-	return s.gate.waiting
+	return s.gate.waitingLogins
+}
+
+func (s *Service) waitingChangesForTest() int {
+	s.gate.mu.Lock()
+	defer s.gate.mu.Unlock()
+	return s.gate.waitingChanges
 }
 
 func (s *Service) failuresForTest() int {
@@ -147,7 +153,9 @@ func TestPasswordChangeWaitsForSlotWithoutQueueBound(t *testing.T) {
 	waitUntil(t, "full login queue", func() bool { return block.running() == 2 && f.svc.waitingForTest() == 1 })
 	changed := make(chan error, 1)
 	go func() { changed <- f.svc.ChangePassword(context.Background(), session.ID, testPassword, newPassword) }()
-	waitUntil(t, "password change waiting", func() bool { return f.svc.waitingForTest() == 2 })
+	waitUntil(t, "password change waiting outside the login queue", func() bool {
+		return f.svc.waitingForTest() == 1 && f.svc.waitingChangesForTest() == 1
+	})
 	close(block.release)
 	if err := receive(t, changed); err != nil {
 		t.Fatalf("ChangePassword = %v", err)
@@ -218,5 +226,117 @@ func TestThrottleWindowRollsAndSuccessResets(t *testing.T) {
 	}
 	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); err != nil {
 		t.Fatalf("four failures after a success must not throttle: %v", err)
+	}
+}
+
+func TestCooldownStopsLoginsQueuedBeforeIt(t *testing.T) {
+	f := newFixture(t, nil)
+	for range DefaultFailureLimit - 1 {
+		if _, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", ""); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("prior failure = %v", err)
+		}
+	}
+	block := &blockVerifications{release: make(chan struct{})}
+	f.hasher.setOnVerify(block.hook)
+	before := len(f.hasher.verifiedHashes())
+	login := func(password string, results chan<- error) {
+		_, _, err := f.svc.Login(context.Background(), "operator", password, "")
+		results <- err
+	}
+	results := make(chan error, 10)
+	for range 2 {
+		go login("wrong password value", results)
+	}
+	waitUntil(t, "2 running logins", func() bool { return block.running() == 2 })
+	for range 7 {
+		go login("wrong password value", results)
+	}
+	go login(testPassword, results) // queued before the cooldown, must not get a session during it
+	waitUntil(t, "8 queued logins", func() bool { return f.svc.waitingForTest() == 8 })
+	close(block.release)
+	var invalid, limited int
+	for range 10 {
+		switch err := receive(t, results); {
+		case errors.Is(err, ErrInvalidCredentials):
+			invalid++
+		case errors.Is(err, ErrLoginRateLimited):
+			limited++
+		default:
+			t.Errorf("unexpected result: %v", err)
+		}
+	}
+	if verified := len(f.hasher.verifiedHashes()) - before; verified != 2 || invalid != 2 || limited != 8 {
+		t.Errorf("verified=%d invalid=%d limited=%d, want 2, 2, 8", verified, invalid, limited)
+	}
+	if len(f.svc.sessions) != 0 {
+		t.Error("a login queued before the cooldown got a session during it")
+	}
+}
+
+func TestWrongCurrentPasswordsRevokeTheSession(t *testing.T) {
+	f := newFixture(t, nil)
+	session, other := f.login(t), f.login(t)
+	for i := range DefaultFailureLimit {
+		if err := f.svc.ChangePassword(t.Context(), session.ID, "wrong current value", newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+			t.Fatalf("wrong current password %d = %v", i+1, err)
+		}
+	}
+	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("change after %d wrong current passwords = %v", DefaultFailureLimit, err)
+	}
+	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("guessing session still valid: %v", err)
+	}
+	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
+		t.Errorf("other session revoked: %v", err)
+	}
+	if len(f.store.calls()) != 0 {
+		t.Error("store called for rejected changes")
+	}
+}
+
+func TestPasswordChangesDoNotShrinkLoginQueue(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	block := &blockVerifications{release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(block.release) })
+	t.Cleanup(release)
+	f.hasher.setOnVerify(block.hook)
+	logins := make(chan error, 10)
+	login := func() {
+		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+		logins <- err
+	}
+	for range 2 {
+		go login()
+	}
+	waitUntil(t, "2 running logins", func() bool { return block.running() == 2 })
+	changes := make(chan error, 12)
+	for range 12 { // one session sends many parallel changes
+		go func() { changes <- f.svc.ChangePassword(context.Background(), session.ID, testPassword, newPassword) }()
+	}
+	for range 8 {
+		go login()
+	}
+	waitUntil(t, "8 queued logins beside pending password changes", func() bool { return f.svc.waitingForTest() == 8 })
+	release()
+	for range 10 {
+		if err := receive(t, logins); err != nil {
+			t.Logf("login during password change: %v", err)
+		}
+	}
+	var changed, unauthenticated int
+	for range 12 {
+		switch err := receive(t, changes); {
+		case err == nil:
+			changed++
+		case errors.Is(err, ErrUnauthenticated):
+			unauthenticated++
+		default:
+			t.Errorf("unexpected change result: %v", err)
+		}
+	}
+	if changed != 1 || unauthenticated != 11 {
+		t.Errorf("changed=%d unauthenticated=%d, want 1 and 11", changed, unauthenticated)
 	}
 }

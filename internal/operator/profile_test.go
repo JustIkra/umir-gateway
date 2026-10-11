@@ -101,7 +101,7 @@ func TestChangePasswordRevokesEverySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := f.store.calls()
-	if len(calls) != 1 || calls[0].PasswordHash != "hash:"+newPassword || calls[0].CredentialVersion != 2 {
+	if len(calls) != 1 || calls[0].PasswordHash != fakeHash(newPassword) || calls[0].CredentialVersion != 2 {
 		t.Fatalf("store calls = %+v", calls)
 	}
 	for _, id := range []string{session.ID, other.ID} {
@@ -150,7 +150,7 @@ func TestPasswordIsStoredAndVerifiedRaw(t *testing.T) {
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, decomposed); err != nil {
 		t.Fatal(err)
 	}
-	if calls := f.store.calls(); len(calls) != 1 || calls[0].PasswordHash != "hash:"+decomposed {
+	if calls := f.store.calls(); len(calls) != 1 || calls[0].PasswordHash != fakeHash(decomposed) {
 		t.Fatalf("stored = %+v", calls)
 	}
 	for _, variant := range []string{"pass e\u0301e\u0301 word", " pass \u00e9\u00e9 word "} {

@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,7 +35,10 @@ func (t *tokens) New() (string, error) {
 	return fmt.Sprintf("token-%d", t.n), nil
 }
 
-// fakeHasher stores "hash:<password>" and records verified hashes; onVerify can block a verification.
+// fakeHash encodes the exact password bytes as ASCII, as a real PHC string would be.
+func fakeHash(password string) string { return "hash:" + hex.EncodeToString([]byte(password)) }
+
+// fakeHasher stores fakeHash(password) and records verified hashes; onVerify can block a verification.
 type fakeHasher struct {
 	mu       sync.Mutex
 	verified []string
@@ -46,7 +50,7 @@ func (h *fakeHasher) Hash(password string) (string, error) {
 	if h.hashErr != nil {
 		return "", h.hashErr
 	}
-	return "hash:" + password, nil
+	return fakeHash(password), nil
 }
 
 func (h *fakeHasher) Verify(password, encoded string) (bool, error) {
@@ -57,7 +61,7 @@ func (h *fakeHasher) Verify(password, encoded string) (bool, error) {
 	if hook != nil {
 		hook()
 	}
-	return encoded == "hash:"+password, nil
+	return encoded == fakeHash(password), nil
 }
 
 func (h *fakeHasher) Check(encoded string) error {
@@ -92,7 +96,7 @@ func (s *fakeStore) Replace(next Account) error {
 }
 
 func testAccount() Account {
-	return Account{ProfileID: "PROFILE1", Login: "operator", DisplayName: "Оператор", PasswordHash: "hash:" + testPassword, CredentialVersion: 1}
+	return Account{ProfileID: "PROFILE1", Login: "operator", DisplayName: "Оператор", PasswordHash: fakeHash(testPassword), CredentialVersion: 1}
 }
 
 type fixture struct {

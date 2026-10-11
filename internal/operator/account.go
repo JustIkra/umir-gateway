@@ -6,7 +6,10 @@ import (
 	"unicode"
 )
 
-const maxProfileID = 128
+const (
+	maxProfileID    = 128
+	maxPasswordHash = 512
+)
 
 // Account is the single persisted operator profile.
 type Account struct {
@@ -59,8 +62,10 @@ func ValidateAccount(a Account) error {
 		return errors.New("account login: invalid")
 	case !isCanonicalDisplayName(a.DisplayName):
 		return errors.New("account displayName: expected canonical display name")
-	case a.PasswordHash == "":
-		return errors.New("account passwordHash: required")
+	case a.PasswordHash == "" || len(a.PasswordHash) > maxPasswordHash || strings.ContainsFunc(a.PasswordHash, func(r rune) bool {
+		return r < '!' || r > '~'
+	}):
+		return errors.New("account passwordHash: expected 1 to 512 printable ASCII characters")
 	case a.CredentialVersion < 1:
 		return errors.New("account credentialVersion: expected positive integer")
 	}

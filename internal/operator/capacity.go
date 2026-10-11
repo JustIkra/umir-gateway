@@ -34,13 +34,15 @@ func rateLimited(wait time.Duration) *RateLimitError {
 }
 
 // verificationGate bounds Argon2id work. Holders release their slot when the check ends; waiters
-// leave when a slot frees or their context ends, so the gate owns no goroutines.
+// leave when a slot frees or their context ends, so the gate owns no goroutines. Only logins count
+// toward the queue bound; password changes run one at a time and wait outside it.
 type verificationGate struct {
 	slots     chan struct{}
 	maxQueued int
 
-	mu      sync.Mutex
-	waiting int
+	mu             sync.Mutex
+	waitingLogins  int
+	waitingChanges int
 }
 
 func newVerificationGate(running, queued int) *verificationGate {
@@ -54,16 +56,20 @@ func (g *verificationGate) acquire(ctx context.Context, bounded bool) (release f
 		return g.release, nil
 	default:
 	}
+	waiting := &g.waitingChanges
+	if bounded {
+		waiting = &g.waitingLogins
+	}
 	g.mu.Lock()
-	if bounded && g.waiting >= g.maxQueued {
+	if bounded && *waiting >= g.maxQueued {
 		g.mu.Unlock()
 		return nil, rateLimited(queueFullRetryAfter)
 	}
-	g.waiting++
+	*waiting++
 	g.mu.Unlock()
 	defer func() {
 		g.mu.Lock()
-		g.waiting--
+		*waiting--
 		g.mu.Unlock()
 	}()
 	select {

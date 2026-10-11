@@ -25,10 +25,16 @@ type FieldError struct {
 
 func (e *FieldError) Error() string { return e.Field + ": " + e.Message }
 
+// validText rejects invalid UTF-8 and U+FFFD, which encoding/json substitutes for invalid bytes and
+// lone surrogates; accepting it would store a value other than the one the client sent.
+func validText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError)
+}
+
 // CanonicalDisplayName trims Unicode whitespace and normalizes to NFC before counting code points.
 func CanonicalDisplayName(raw string) (string, error) {
 	reject := func(message string) error { return &FieldError{Field: "displayName", Message: message} }
-	if !utf8.ValidString(raw) {
+	if !validText(raw) {
 		return "", reject("must be valid UTF-8 text")
 	}
 	name := norm.NFC.String(strings.TrimFunc(raw, unicode.IsSpace))
@@ -43,7 +49,7 @@ func CanonicalDisplayName(raw string) (string, error) {
 
 // ValidateLogin accepts the immutable login. It is compared exactly, so surrounding whitespace is rejected.
 func ValidateLogin(login string) error {
-	if !utf8.ValidString(login) || login == "" || utf8.RuneCountInString(login) > maxLogin ||
+	if !validText(login) || login == "" || utf8.RuneCountInString(login) > maxLogin ||
 		strings.ContainsFunc(login, unicode.IsControl) || strings.TrimFunc(login, unicode.IsSpace) != login {
 		return &FieldError{Field: "login", Message: "must be 1 to 128 characters without control characters or surrounding spaces"}
 	}
@@ -53,7 +59,7 @@ func ValidateLogin(login string) error {
 // CheckPassword accepts 8 to 32 code points of valid UTF-8; length is the only rule in this phase.
 // Passwords are never trimmed, normalized or truncated.
 func CheckPassword(password string) error {
-	if !utf8.ValidString(password) {
+	if !validText(password) {
 		return &FieldError{Field: "newPassword", Message: "must be valid UTF-8 text"}
 	}
 	if n := utf8.RuneCountInString(password); n < minPassword || n > maxPassword {

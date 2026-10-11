@@ -34,7 +34,16 @@ func (s *Service) UpdateDisplayName(id, raw string) (Profile, error) {
 
 // ChangePassword replaces the password and revokes every session, including id. Verification and
 // hashing run outside the mutex; the commit rechecks that the session and credentials did not change.
+// Changes run one at a time, so parallel requests cannot hold verification slots or the login queue,
+// and FailureLimit wrong current passwords revoke the session, sending a guesser back to login.
 func (s *Service) ChangePassword(ctx context.Context, id, current, next string) error {
+	select {
+	case s.changing <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-s.changing }()
+
 	s.mu.Lock()
 	now := s.opts.Now()
 	st, err := s.activeLocked(id, now)
@@ -50,6 +59,7 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 		return err
 	}
 	if !utf8.ValidString(current) || utf8.RuneCountInString(current) > maxPassword {
+		s.recordWrongCurrent(id)
 		return ErrCurrentPasswordIncorrect
 	}
 	ok, err := s.verify(ctx, current, snapshot.PasswordHash)
@@ -57,6 +67,7 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 		return err
 	}
 	if !ok {
+		s.recordWrongCurrent(id)
 		return ErrCurrentPasswordIncorrect
 	}
 	hash, err := s.hash(ctx, next)
@@ -80,6 +91,18 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	}
 	clear(s.sessions)
 	return nil
+}
+
+// recordWrongCurrent counts a wrong current password and revokes the session at FailureLimit.
+func (s *Service) recordWrongCurrent(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.sessions[id]; ok {
+		st.wrongCurrent++
+		if st.wrongCurrent >= s.opts.FailureLimit {
+			delete(s.sessions, id)
+		}
+	}
 }
 
 // hash creates the verifier for a new password inside a verification slot.

@@ -60,6 +60,8 @@ type session struct {
 	credentialVersion int64
 	created           time.Time
 	lastSeen          time.Time
+	// wrongCurrent counts wrong current passwords in password changes made with this session.
+	wrongCurrent int
 }
 
 // Service owns the account cache, sessions and recovery mode. One mutex guards all of them, and account
@@ -68,9 +70,9 @@ type session struct {
 // removed when it is touched or when a new entry needs room.
 type Service struct {
 	opts Options
-	// dummyHash is verified for an unknown login, so it costs the same as checking the real account.
-	dummyHash string
-	gate      *verificationGate
+	gate *verificationGate
+	// changing admits one password change at a time.
+	changing chan struct{}
 
 	mu         sync.Mutex
 	account    Account
@@ -94,17 +96,9 @@ func NewService(account Account, opts Options) (*Service, error) {
 	if err := opts.Hasher.Check(account.PasswordHash); err != nil {
 		return nil, fmt.Errorf("account passwordHash: %w", err)
 	}
-	secret, err := opts.NewToken()
-	if err != nil {
-		return nil, fmt.Errorf("dummy verifier: %w", err)
-	}
-	dummyHash, err := opts.Hasher.Hash(secret)
-	if err != nil {
-		return nil, fmt.Errorf("dummy verifier: %w", err)
-	}
 	return &Service{
 		opts:      opts,
-		dummyHash: dummyHash,
+		changing:  make(chan struct{}, 1),
 		account:   account,
 		sessions:  make(map[string]*session),
 		anonymous: make(map[string]*anonymousContext),
@@ -114,8 +108,9 @@ func NewService(account Account, opts Options) (*Service, error) {
 }
 
 // Login verifies the credentials and opens a new session; previousID, when present, is revoked.
-// An unknown login is verified against the dummy hash, so timing and errors do not reveal whether the
-// login exists. A credential change during verification rejects the attempt.
+// An unknown login is verified against the account's own hash and the result discarded, so timing and
+// errors do not reveal whether the login exists, whatever parameters that hash carries.
+// A credential change during verification rejects the attempt.
 func (s *Service) Login(ctx context.Context, login, password, previousID string) (Profile, Session, error) {
 	s.mu.Lock()
 	if s.recovering {
@@ -134,16 +129,11 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
 	loginOK := subtle.ConstantTimeCompare([]byte(login), []byte(snapshot.Login)) == 1
-	encoded := s.dummyHash
-	if loginOK {
-		encoded = snapshot.PasswordHash
-	}
-	passwordOK, err := s.verifyLogin(ctx, password, encoded)
+	ok, err := s.verifyLogin(ctx, loginOK, password, snapshot.PasswordHash)
 	if err != nil {
 		return Profile{}, Session{}, err
 	}
-	if !passwordOK || !loginOK {
-		s.recordFailure()
+	if !ok {
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
 	if err := ctx.Err(); err != nil {
@@ -186,18 +176,35 @@ func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	return s.account.Profile(), s.view(id, st), nil
 }
 
-// verifyLogin runs a login check through the bounded queue.
-func (s *Service) verifyLogin(ctx context.Context, password, encoded string) (bool, error) {
-	return s.check(ctx, true, password, encoded)
+// verifyLogin checks a login inside a verification slot. The cooldown is checked again after the wait,
+// and a failure is recorded before the slot is released, so logins queued before a cooldown began are
+// rejected instead of verified.
+func (s *Service) verifyLogin(ctx context.Context, loginOK bool, password, encoded string) (bool, error) {
+	release, err := s.gate.acquire(ctx, true)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	s.mu.Lock()
+	wait := s.cooldownLocked(s.opts.Now())
+	s.mu.Unlock()
+	if wait > 0 {
+		return false, rateLimited(wait)
+	}
+	ok, err := s.opts.Hasher.Verify(password, encoded)
+	if err != nil {
+		return false, fmt.Errorf("verify password: %w", err)
+	}
+	if !ok || !loginOK {
+		s.recordFailure()
+		return false, nil
+	}
+	return true, nil
 }
 
-// verify runs a password-change check; it waits for a slot without the login queue bound.
+// verify runs a password-change check in a verification slot, waiting without the login queue bound.
 func (s *Service) verify(ctx context.Context, password, encoded string) (bool, error) {
-	return s.check(ctx, false, password, encoded)
-}
-
-func (s *Service) check(ctx context.Context, bounded bool, password, encoded string) (bool, error) {
-	release, err := s.gate.acquire(ctx, bounded)
+	release, err := s.gate.acquire(ctx, false)
 	if err != nil {
 		return false, err
 	}

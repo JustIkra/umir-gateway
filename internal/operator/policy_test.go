@@ -27,7 +27,7 @@ func TestCanonicalDisplayName(t *testing.T) {
 			t.Errorf("CanonicalDisplayName(%q) = %q, %v; want %q", tc.raw, got, err, tc.want)
 		}
 	}
-	for _, raw := range []string{"", " Я ", "\u3000", strings.Repeat("я", 81), "a\x00b", "bad\xffname"} {
+	for _, raw := range []string{"", " Я ", "\u3000", strings.Repeat("я", 81), "a\x00b", "bad\xffname", "Опе\uFFFDратор"} {
 		if _, err := CanonicalDisplayName(raw); err == nil || fieldOf(t, err) != "displayName" {
 			t.Errorf("CanonicalDisplayName(%q) error = %v", raw, err)
 		}
@@ -40,7 +40,7 @@ func TestValidateLogin(t *testing.T) {
 			t.Errorf("ValidateLogin(%q) = %v", login, err)
 		}
 	}
-	for _, login := range []string{"", " operator", "operator ", "a\tb", strings.Repeat("x", 129), "bad\xff"} {
+	for _, login := range []string{"", " operator", "operator ", "a\tb", strings.Repeat("x", 129), "bad\xff", "oper\uFFFDtor"} {
 		if err := ValidateLogin(login); err == nil {
 			t.Errorf("ValidateLogin(%q) accepted", login)
 		}
@@ -64,6 +64,7 @@ func TestCheckPassword(t *testing.T) {
 		"\u00e9\u00e9\u00e9\u00e9", // 4 precomposed code points
 		strings.Repeat("🙂", 33),
 		"bad utf8\xff",
+		"password\uFFFD", // what encoding/json makes of invalid UTF-8 or a lone surrogate
 	} {
 		err := CheckPassword(password)
 		if err == nil || fieldOf(t, err) != "newPassword" {

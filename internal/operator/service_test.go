@@ -30,14 +30,12 @@ func TestLoginOpensSession(t *testing.T) {
 
 func TestLoginErrorsAreGenericAndAlwaysVerify(t *testing.T) {
 	f := newFixture(t, nil)
-	if f.svc.dummyHash == "" || f.svc.dummyHash == testAccount().PasswordHash {
-		t.Fatalf("dummy verifier = %q", f.svc.dummyHash)
-	}
-	for _, attempt := range []struct{ login, password, verifiedWith string }{
-		{"operator", "wrong password value", testAccount().PasswordHash},
-		{"nobody", testPassword, f.svc.dummyHash},
-		{"Operator", testPassword, f.svc.dummyHash}, // logins are compared exactly
-		{"", "", f.svc.dummyHash},
+	// An unknown login is checked against the account's own hash, so both cost the same by construction.
+	for _, attempt := range []struct{ login, password string }{
+		{"operator", "wrong password value"},
+		{"nobody", testPassword},
+		{"Operator", testPassword}, // logins are compared exactly
+		{"", ""},
 	} {
 		before := len(f.hasher.verifiedHashes())
 		_, _, err := f.svc.Login(t.Context(), attempt.login, attempt.password, "")
@@ -45,8 +43,8 @@ func TestLoginErrorsAreGenericAndAlwaysVerify(t *testing.T) {
 			t.Errorf("Login(%q) error = %v", attempt.login, err)
 		}
 		verified := f.hasher.verifiedHashes()
-		if len(verified) != before+1 || verified[before] != attempt.verifiedWith {
-			t.Errorf("Login(%q) verified against %v, want one check of %q", attempt.login, verified[before:], attempt.verifiedWith)
+		if len(verified) != before+1 || verified[before] != testAccount().PasswordHash {
+			t.Errorf("Login(%q) verified against %v, want one check of the account hash", attempt.login, verified[before:])
 		}
 	}
 	before := len(f.hasher.verifiedHashes())

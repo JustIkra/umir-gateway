@@ -51,6 +51,13 @@ type document struct {
 
 var errInvalidFile = errors.New("operator account file: invalid JSON document")
 
+// knownKeys are the only accepted keys. encoding/json matches field names case-insensitively, so an
+// exact check is what keeps "LOGIN" or "SchemaVersion" from loading.
+var knownKeys = map[string]bool{
+	"schemaVersion": true, "profileID": true, "login": true,
+	"displayName": true, "passwordHash": true, "credentialVersion": true,
+}
+
 // Open loads the account at path. An absent file is created from bootstrap; an existing file is
 // authoritative and never rewritten here. Errors never contain account values.
 func Open(path string, bootstrap Bootstrap, opts Options) (operator.Account, *Store, error) {
@@ -124,9 +131,10 @@ func encode(account operator.Account) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// decode accepts exactly one object with known, unique fields; JSON would silently replace invalid UTF-8.
+// decode accepts exactly one object with known, unique, exactly spelled fields; JSON would silently
+// replace invalid UTF-8, and ValidateAccount rejects the U+FFFD that lone-surrogate escapes become.
 func decode(data []byte) (operator.Account, error) {
-	if !utf8.Valid(data) || rejectDuplicateKeys(data) != nil {
+	if !utf8.Valid(data) || rejectUnexpectedKeys(data) != nil {
 		return operator.Account{}, errInvalidFile
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -147,7 +155,7 @@ func decode(data []byte) (operator.Account, error) {
 	}, nil
 }
 
-func rejectDuplicateKeys(data []byte) error {
+func rejectUnexpectedKeys(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
 		return errInvalidFile
@@ -156,7 +164,7 @@ func rejectDuplicateKeys(data []byte) error {
 	for decoder.More() {
 		token, err := decoder.Token()
 		key, isKey := token.(string)
-		if err != nil || !isKey || seen[key] {
+		if err != nil || !isKey || !knownKeys[key] || seen[key] {
 			return errInvalidFile
 		}
 		seen[key] = true
