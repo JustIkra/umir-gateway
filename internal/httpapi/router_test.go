@@ -17,18 +17,26 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // testRoutes guards with a stub that records what it protected and lets it through.
 type testRoutes struct {
-	serving, warehouse, operator *recordingHandler
-	guarded                      []string
+	serving, warehouse, operator, feedback *recordingHandler
+	guarded, feedbackGuarded               []string
 }
 
 func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
 	t.Helper()
-	routes := &testRoutes{serving: &recordingHandler{}, warehouse: &recordingHandler{}, operator: &recordingHandler{}}
+	routes := &testRoutes{
+		serving: &recordingHandler{}, warehouse: &recordingHandler{}, operator: &recordingHandler{}, feedback: &recordingHandler{},
+	}
 	router, err := NewRouter(Routes{
-		Serving: routes.serving, Warehouse: routes.warehouse, Operator: routes.operator,
+		Serving: routes.serving, Warehouse: routes.warehouse, Operator: routes.operator, Feedback: routes.feedback,
 		Protect: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				routes.guarded = append(routes.guarded, r.Method+" "+r.URL.Path)
+				next.ServeHTTP(w, r)
+			})
+		},
+		GuardFeedback: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				routes.feedbackGuarded = append(routes.feedbackGuarded, r.Method+" "+r.URL.RequestURI())
 				next.ServeHTTP(w, r)
 			})
 		},
@@ -42,16 +50,19 @@ func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
 
 func TestNewRouterRequiresEveryRoute(t *testing.T) {
 	for name, drop := range map[string]func(*Routes){
-		"serving":    func(r *Routes) { r.Serving = nil },
-		"warehouse":  func(r *Routes) { r.Warehouse = nil },
-		"operator":   func(r *Routes) { r.Operator = nil },
-		"protect":    func(r *Routes) { r.Protect = nil },
-		"request ID": func(r *Routes) { r.NewRequestID = nil },
+		"serving":        func(r *Routes) { r.Serving = nil },
+		"warehouse":      func(r *Routes) { r.Warehouse = nil },
+		"operator":       func(r *Routes) { r.Operator = nil },
+		"protect":        func(r *Routes) { r.Protect = nil },
+		"request ID":     func(r *Routes) { r.NewRequestID = nil },
+		"feedback":       func(r *Routes) { r.Feedback = nil },
+		"feedback guard": func(r *Routes) { r.GuardFeedback = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
+			pass := func(next http.Handler) http.Handler { return next }
 			routes := Routes{
 				Serving: &recordingHandler{}, Warehouse: &recordingHandler{}, Operator: &recordingHandler{},
-				Protect: func(next http.Handler) http.Handler { return next }, NewRequestID: func() string { return "" },
+				Feedback: &recordingHandler{}, Protect: pass, GuardFeedback: pass, NewRequestID: func() string { return "" },
 			}
 			drop(&routes)
 			if _, err := NewRouter(routes); err == nil {
@@ -126,7 +137,8 @@ func TestRouterGuardsEveryBusinessRouteExceptHealth(t *testing.T) {
 func TestRouterRejectedRequestNeverReachesUpstream(t *testing.T) {
 	serving := &recordingHandler{}
 	router, err := NewRouter(Routes{
-		Serving: serving, Warehouse: &recordingHandler{}, Operator: &recordingHandler{},
+		Serving: serving, Warehouse: &recordingHandler{}, Operator: &recordingHandler{}, Feedback: &recordingHandler{},
+		GuardFeedback: func(next http.Handler) http.Handler { return next },
 		Protect: func(http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 		},
@@ -195,5 +207,26 @@ func TestRouterRejectsUnknownPath(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/kitchen/menu", nil))
 	if response.Code != http.StatusNotFound || routes.serving.request != nil || routes.warehouse.request != nil {
 		t.Fatalf("unknown path: %d", response.Code)
+	}
+}
+
+func TestRouterSendsOnlyTheExactFeedbackPathThroughItsGuard(t *testing.T) {
+	routes, router := newTestRouter(t)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/feedback?debug=1", nil))
+	got := routes.feedback.request
+	if len(routes.feedbackGuarded) != 1 || routes.feedbackGuarded[0] != "POST /api/feedback?debug=1" || len(routes.guarded) != 0 {
+		t.Fatalf("feedback guard saw %v, business guard %v", routes.feedbackGuarded, routes.guarded)
+	}
+	if got == nil || got.URL.Path != "/feedback" || got.URL.RawQuery != "" || response.Code != http.StatusTeapot {
+		t.Fatalf("feedback service got %+v, status %d", got, response.Code)
+	}
+	for _, target := range []string{"/api/feedback/", "/api/feedback/export", "/api/feedbacks"} {
+		routes, router := newTestRouter(t)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, target, nil))
+		if routes.feedback.request != nil || len(routes.feedbackGuarded) != 0 || response.Code != http.StatusNotFound {
+			t.Errorf("%s reached feedback: %d", target, response.Code)
+		}
 	}
 }

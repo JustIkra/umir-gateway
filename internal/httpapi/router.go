@@ -18,19 +18,25 @@ type Routes struct {
 	Operator http.Handler
 	// Protect admits a business request only for the operator's session.
 	Protect func(http.Handler) http.Handler
+	// Feedback receives exactly /api/feedback as /feedback, without a query, once GuardFeedback admitted it.
+	Feedback      http.Handler
+	GuardFeedback func(http.Handler) http.Handler
 	// NewRequestID names each request in error responses and logs.
 	NewRequestID func() string
 }
 
 func NewRouter(routes Routes) (http.Handler, error) {
-	if routes.Serving == nil || routes.Warehouse == nil || routes.Operator == nil || routes.Protect == nil || routes.NewRequestID == nil {
-		return nil, errors.New("router requires serving, warehouse, operator, protect and request IDs")
+	if routes.Serving == nil || routes.Warehouse == nil || routes.Operator == nil || routes.Protect == nil ||
+		routes.Feedback == nil || routes.GuardFeedback == nil || routes.NewRequestID == nil {
+		return nil, errors.New("router requires serving, warehouse, operator, protect, feedback and its guard, and request IDs")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
 	mux.Handle("/api/operator/", routes.Operator)
 	mux.Handle("/api/serving/", business("/api/serving", routes.Serving, routes.Protect))
 	mux.Handle("/api/warehouse/", business("/api/warehouse", routes.Warehouse, routes.Protect))
+	// Only the exact path: other paths of the feedback service are never public.
+	mux.Handle("/api/feedback", routes.GuardFeedback(toFeedback(routes.Feedback)))
 	return WithRequestID(mux, routes.NewRequestID), nil
 }
 
@@ -57,5 +63,17 @@ func business(prefix string, upstream http.Handler, protect func(http.Handler) h
 			return
 		}
 		guarded.ServeHTTP(w, r)
+	})
+}
+
+// toFeedback gives the feedback service its own path for the public form, without the caller's query.
+func toFeedback(service http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out := r.WithContext(r.Context())
+		target := *r.URL
+		target.Path, target.RawPath, target.RawQuery, target.ForceQuery = "/feedback", "", "", false
+		out.URL = &target
+		out.RequestURI = ""
+		service.ServeHTTP(w, out)
 	})
 }

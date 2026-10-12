@@ -82,6 +82,10 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 	if err != nil {
 		return nil, fmt.Errorf("warehouse: %w", err)
 	}
+	feedback, err := upstream(cfg.FeedbackURL)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: %w", err)
+	}
 	api, err := operatorhttp.New(operatorhttp.Options{
 		Accounts: accounts, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode),
 		PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now,
@@ -90,7 +94,8 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 		return nil, err
 	}
 	return httpapi.NewRouter(httpapi.Routes{
-		Serving: serving, Warehouse: warehouse, Operator: api, Protect: api.Protect, NewRequestID: rand.Text,
+		Serving: serving, Warehouse: warehouse, Operator: api, Protect: api.Protect,
+		Feedback: feedback, GuardFeedback: api.GuardFeedback, NewRequestID: rand.Text,
 	})
 }
 
