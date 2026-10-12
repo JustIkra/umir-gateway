@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 // Routes are the handlers behind the gateway's paths. Every field is required: business routes cannot
@@ -23,18 +25,25 @@ type Routes struct {
 	GuardFeedback func(http.Handler) http.Handler
 	// NewRequestID names each request in error responses and logs.
 	NewRequestID func() string
+	// Record learns the status of each state-changing business request that passed Protect and of each
+	// display-name change: 0 when no upstream response arrived.
+	Record func(method, path string, status int)
 }
 
 func NewRouter(routes Routes) (http.Handler, error) {
 	if routes.Serving == nil || routes.Warehouse == nil || routes.Operator == nil || routes.Protect == nil ||
-		routes.Feedback == nil || routes.GuardFeedback == nil || routes.NewRequestID == nil {
-		return nil, errors.New("router requires serving, warehouse, operator, protect, feedback and its guard, and request IDs")
+		routes.Feedback == nil || routes.GuardFeedback == nil || routes.NewRequestID == nil || routes.Record == nil {
+		return nil, errors.New("router requires serving, warehouse, operator, protect, feedback and its guard, request IDs and a recorder")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
 	mux.Handle("/api/operator/", routes.Operator)
-	mux.Handle("/api/serving/", business("/api/serving", routes.Serving, routes.Protect))
-	mux.Handle("/api/warehouse/", business("/api/warehouse", routes.Warehouse, routes.Protect))
+	// The display name is shown on every screen, so its change is recorded like a business write.
+	mux.Handle("/api/operator/me/display-name", recordMethods(routes.Operator, routes.Record, http.MethodPatch))
+	mux.Handle("/api/serving/", business("/api/serving", routes.Serving, routes.Protect, routes.Record))
+	// Only the gateway's expiration scheduler starts runs; the browser never reaches the route.
+	mux.Handle("/api/warehouse/", hide("/api/warehouse/expiration-runs",
+		business("/api/warehouse", routes.Warehouse, routes.Protect, routes.Record)))
 	// Only the exact path: other paths of the feedback service are never public.
 	mux.Handle("/api/feedback", routes.GuardFeedback(toFeedback(routes.Feedback)))
 	return WithRequestID(mux, routes.NewRequestID), nil
@@ -53,16 +62,39 @@ func health(w http.ResponseWriter, r *http.Request) {
 }
 
 // business leaves only the exact GET/HEAD health check of an upstream public. Every other request
-// under prefix passes protect before it can reach the upstream.
-func business(prefix string, upstream http.Handler, protect func(http.Handler) http.Handler) http.Handler {
+// under prefix passes protect before it can reach the upstream; admitted writes are recorded.
+func business(prefix string, upstream http.Handler, protect func(http.Handler) http.Handler, report func(method, path string, status int)) http.Handler {
 	public := http.StripPrefix(prefix, upstream)
-	guarded := protect(public)
+	guarded := protect(recordMethods(public, report, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == prefix+"/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			public.ServeHTTP(w, r)
 			return
 		}
 		guarded.ServeHTTP(w, r)
+	})
+}
+
+// recordMethods records the requests with one of methods and passes the others through unrecorded.
+func recordMethods(next http.Handler, report func(method, path string, status int), methods ...string) http.Handler {
+	recorded := record(next, report)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slices.Contains(methods, r.Method) {
+			recorded.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hide answers 404 for path and every path under it, however the client escaped them.
+func hide(path string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == path || strings.HasPrefix(r.URL.Path, path+"/") {
+			WriteProblem(w, r, http.StatusNotFound, Problem{Code: "NotFound", Message: "unknown route"})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
+	"github.com/JustIkra/umir-gateway/internal/journal"
 	"github.com/JustIkra/umir-gateway/internal/operator"
 	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
@@ -60,11 +61,36 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 	})
 }
 
-// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
-// Each upstream is wrapped so operator credentials never reach it and it cannot set them.
-func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.Logger) (http.Handler, error) {
+// components are the parts of one gateway process: the HTTP handler and the change journal.
+type components struct {
+	handler http.Handler
+	journal *journal.Journal
+}
+
+// newComponents assembles the gateway from cfg.
+func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
+	accounts, err := newAccounts(cfg.Operator)
+	if err != nil {
+		return components{}, err
+	}
+	changes, err := journal.New(cfg.JournalCapacity, rand.Text, time.Now)
+	if err != nil {
+		return components{}, err
+	}
 	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
+	handler, err := newHandler(cfg, accounts, transport, changes, logger)
+	if err != nil {
+		return components{}, err
+	}
+	return components{handler: handler, journal: changes}, nil
+}
+
+// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
+// Each upstream is wrapped so operator credentials never reach it and it cannot set them. Admitted
+// writes go to changes.
+func newHandler(cfg config.Config, accounts operatorhttp.Accounts, transport http.RoundTripper, changes *journal.Journal,
+	logger *log.Logger) (http.Handler, error) {
 	proxy := func(target *url.URL) (http.Handler, error) {
 		proxy, err := httpupstream.NewProxy(target, transport)
 		if err != nil {
@@ -107,6 +133,9 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 		Feedback: feedback, NewRequestID: rand.Text,
 		GuardFeedback: func(next http.Handler) http.Handler {
 			return withDeadline(api.GuardFeedback(next), cfg.UpstreamTimeout)
+		},
+		Record: func(method, path string, status int) {
+			changes.Append(journal.Entry{Source: journal.SourceRequest, Method: method, Path: path, Status: status, Outcome: journal.OutcomeOf(status)})
 		},
 	})
 }
@@ -205,17 +234,13 @@ func main() {
 		}
 		return
 	}
-	accounts, err := newAccounts(cfg.Operator)
-	if err != nil {
-		log.Fatal(err)
-	}
-	app, err := newHandler(cfg, accounts, log.Default())
+	app, err := newComponents(cfg, log.Default())
 	if err != nil {
 		log.Fatal(err)
 	}
 	server := &http.Server{
 		Addr:              listenAddress(cfg),
-		Handler:           app,
+		Handler:           app.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

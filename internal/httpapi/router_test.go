@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,7 +19,7 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // testRoutes guards with a stub that records what it protected and lets it through.
 type testRoutes struct {
 	serving, warehouse, operator, feedback *recordingHandler
-	guarded, feedbackGuarded               []string
+	guarded, feedbackGuarded, recorded     []string
 }
 
 func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
@@ -41,6 +42,9 @@ func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
 			})
 		},
 		NewRequestID: func() string { return "req-1" },
+		Record: func(method, path string, status int) {
+			routes.recorded = append(routes.recorded, fmt.Sprintf("%s %s %d", method, path, status))
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,12 +61,14 @@ func TestNewRouterRequiresEveryRoute(t *testing.T) {
 		"request ID":     func(r *Routes) { r.NewRequestID = nil },
 		"feedback":       func(r *Routes) { r.Feedback = nil },
 		"feedback guard": func(r *Routes) { r.GuardFeedback = nil },
+		"recorder":       func(r *Routes) { r.Record = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			pass := func(next http.Handler) http.Handler { return next }
 			routes := Routes{
 				Serving: &recordingHandler{}, Warehouse: &recordingHandler{}, Operator: &recordingHandler{},
 				Feedback: &recordingHandler{}, Protect: pass, GuardFeedback: pass, NewRequestID: func() string { return "" },
+				Record: func(string, string, int) {},
 			}
 			drop(&routes)
 			if _, err := NewRouter(routes); err == nil {
@@ -143,12 +149,14 @@ func TestRouterRejectedRequestNeverReachesUpstream(t *testing.T) {
 			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 		},
 		NewRequestID: func() string { return "req-1" },
+		Record:       func(string, string, int) { t.Error("a rejected request was recorded") },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/serving/menu", nil))
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/serving/orders", nil))
 	if response.Code != http.StatusUnauthorized || serving.request != nil {
 		t.Fatalf("rejected request: %d, upstream called: %v", response.Code, serving.request != nil)
 	}
