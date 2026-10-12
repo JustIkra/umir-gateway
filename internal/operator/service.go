@@ -152,14 +152,19 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 	if s.account.CredentialVersion != snapshot.CredentialVersion {
 		return Profile{}, Session{}, ErrInvalidCredentials
 	}
-	s.throttle.failures = s.throttle.failures[:0]
-	if previousID != "" {
-		delete(s.sessions, previousID)
+	// The caller may have gone while this login waited for the lock; it then gets no session.
+	if err := ctx.Err(); err != nil {
+		return Profile{}, Session{}, err
 	}
 	now := s.opts.Now()
 	id, csrf, err := s.newPairLocked()
 	if err != nil {
 		return Profile{}, Session{}, err
+	}
+	// The previous session ends only once its replacement exists.
+	s.throttle.failures = s.throttle.failures[:0]
+	if previousID != "" {
+		delete(s.sessions, previousID)
 	}
 	s.makeRoomLocked(now)
 	st := &session{csrfToken: csrf, credentialVersion: s.account.CredentialVersion, created: now, lastSeen: now}
