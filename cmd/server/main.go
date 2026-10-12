@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -14,13 +15,52 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/JustIkra/umir-gateway/internal/adapters/accountfile"
+	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
+	"github.com/JustIkra/umir-gateway/internal/operator"
+	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
 
-// newHandler assembles the gateway: one proxy per upstream behind the router.
-func newHandler(cfg config.Config) (http.Handler, error) {
+// newToken returns 128 bits of randomness as cookie-safe text.
+func newToken() (string, error) { return rand.Text(), nil }
+
+// newAccounts opens the account file, creating it from the bootstrap settings only when it is absent,
+// and starts the operator account module.
+func newAccounts(cfg config.Operator) (*operator.Service, error) {
+	hasher, err := argon2id.New(argon2id.Selected, rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	account, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{
+		Login: cfg.BootstrapLogin, DisplayName: cfg.BootstrapDisplayName, PasswordHash: cfg.BootstrapPasswordHash,
+	}, accountfile.Options{
+		NewProfileID: newToken,
+		Validate: func(account operator.Account) error {
+			if err := operator.ValidateAccount(account); err != nil {
+				return err
+			}
+			return hasher.Check(account.PasswordHash)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("operator account: %w", err)
+	}
+	return operator.NewService(account, operator.Options{
+		Store: store, Hasher: hasher, Now: time.Now, NewToken: newToken,
+		IdleTimeout: cfg.IdleTimeout, AbsoluteTimeout: cfg.AbsoluteTimeout,
+		MaxSessions: operator.DefaultMaxSessions, MaxAnonymous: operator.DefaultMaxAnonymous,
+		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
+		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
+		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
+	})
+}
+
+// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
+// Each upstream is wrapped so operator credentials never reach it and it cannot set them.
+func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.Logger) (http.Handler, error) {
 	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
 	upstream := func(target *url.URL) (http.Handler, error) {
@@ -29,7 +69,8 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 			return nil, err
 		}
 		proxy.ErrorHandler = httpapi.WriteTransportError
-		return withDeadline(proxy, cfg.UpstreamTimeout), nil
+		proxy.ModifyResponse = operatorhttp.DropReservedCookies
+		return operatorhttp.StripCredentials(withDeadline(proxy, cfg.UpstreamTimeout)), nil
 	}
 	serving, err := upstream(cfg.ServingURL)
 	if err != nil {
@@ -39,7 +80,16 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("warehouse: %w", err)
 	}
-	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
+	api, err := operatorhttp.New(operatorhttp.Options{
+		Accounts: accounts, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode),
+		PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return httpapi.NewRouter(httpapi.Routes{
+		Serving: serving, Warehouse: warehouse, Operator: api, Protect: api.Protect, NewRequestID: rand.Text,
+	})
 }
 
 // withDeadline bounds the whole upstream exchange, including reading the client body;
@@ -123,7 +173,11 @@ func main() {
 		}
 		return
 	}
-	app, err := newHandler(cfg)
+	accounts, err := newAccounts(cfg.Operator)
+	if err != nil {
+		log.Fatal(err)
+	}
+	app, err := newHandler(cfg, accounts, log.Default())
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -146,7 +146,7 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 	}()
 	address := "http://127.0.0.1:" + port
 	waitChildHealthy(t, address, exited)
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := signInOver(t, address)
 	responseDone := make(chan error, 1)
 	go func() {
 		response, err := client.Get(address + "/api/serving/menu")
