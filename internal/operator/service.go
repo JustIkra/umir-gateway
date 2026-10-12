@@ -225,7 +225,8 @@ func (s *Service) Authorize(id, csrfToken string) (Profile, Session, error) {
 }
 
 // Current returns the profile and session for the operator's own view. An ordinary session's renewed
-// idle deadline is stored before it is reported; a remembered session has nothing to renew.
+// idle deadline is stored before it is reported; a remembered session has nothing to renew. If the
+// store definitely failed, the session stays usable and the deadline the store holds is reported.
 func (s *Service) Current(id string) (Profile, Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -243,7 +244,13 @@ func (s *Service) Current(id string) (Profile, Session, error) {
 	renewed.lastSeen = now
 	next[sessionDigest(id)] = &renewed
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
-		return Profile{}, Session{}, err
+		if !errors.Is(err, ErrSessionStorageUnavailable) {
+			return Profile{}, Session{}, err
+		}
+		st.lastSeen = now
+		stored := *st
+		stored.lastSeen = st.storedLastSeen
+		return s.account.Profile(), s.view(id, &stored), nil
 	}
 	return s.account.Profile(), s.view(id, &renewed), nil
 }

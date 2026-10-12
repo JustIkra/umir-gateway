@@ -100,10 +100,9 @@ func TestUpdateDisplayNameStorageOutcomes(t *testing.T) {
 	f.store.fail(fmt.Errorf("create temp file: %w", operator.ErrStorageUnavailable))
 	wantProblem(t, f.patch("/api/operator/me/display-name", `{"displayName":"Смена"}`, session, token),
 		http.StatusServiceUnavailable, "AccountStorageUnavailable")
-	// A definite failure changed nothing: the session still works.
-	f.store.fail(nil)
+	// A definite failure changed nothing: the session still works, even while the store keeps failing.
 	if me := f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}); me.Code != http.StatusOK {
-		t.Fatalf("me after a definite failure: %d", me.Code)
+		t.Fatalf("me after a definite failure: %d %s", me.Code, me.Body)
 	}
 	f.store.fail(errors.New("rename outcome unknown"))
 	wantProblem(t, f.patch("/api/operator/me/display-name", `{"displayName":"Смена"}`, session, token),

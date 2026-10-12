@@ -26,6 +26,8 @@ type session struct {
 	credentialVersion int64
 	created           time.Time
 	lastSeen          time.Time
+	// storedLastSeen is the activity time the store holds for this session.
+	storedLastSeen time.Time
 	// expires is the absolute deadline fixed at login.
 	expires time.Time
 	// wrongCurrent counts wrong current passwords in password changes made with this session.
@@ -86,7 +88,7 @@ func (s *Service) restore(stored []StoredSession) {
 	for _, r := range stored {
 		st := &session{
 			rememberMe: r.RememberMe, credentialVersion: r.CredentialVersion,
-			created: r.Created, lastSeen: r.LastSeen, expires: r.ExpiresAt,
+			created: r.Created, lastSeen: r.LastSeen, storedLastSeen: r.LastSeen, expires: r.ExpiresAt,
 		}
 		if !s.expired(st, now) && st.credentialVersion == s.account.CredentialVersion {
 			s.sessions[r.Digest] = st
@@ -165,6 +167,9 @@ func (s *Service) commitLocked(account Account, sessions map[string]*session, ki
 	}
 	switch {
 	case err == nil:
+		for _, st := range sessions {
+			st.storedLastSeen = storedLastSeen(st)
+		}
 		s.account, s.sessions = account, sessions
 		return nil
 	case errors.Is(err, ErrStorageUnavailable) && !errors.Is(err, ErrUpdateOutcomeUnknown):

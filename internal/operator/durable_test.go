@@ -102,10 +102,31 @@ func TestCurrentStoresTheOrdinaryIdleDeadlineBeforeReportingIt(t *testing.T) {
 	if stored := f.store.last().Sessions; len(stored) != 1 || !stored[0].LastSeen.Equal(f.clock.Now()) {
 		t.Errorf("stored sessions = %+v, want the reported activity", stored)
 	}
+}
+
+func TestCurrentReportsTheStoredDeadlineWhileStorageFails(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.clock.Advance(5 * time.Minute)
+	if _, _, err := f.svc.Current(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored := f.clock.Now().Add(DefaultIdleTimeout)
+	f.clock.Advance(5 * time.Minute)
+	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
+		t.Fatal(err)
+	}
 	f.store.setErr(errDiskFull)
 	f.clock.Advance(time.Minute)
-	if _, _, err := f.svc.Current(session.ID); !errors.Is(err, ErrSessionStorageUnavailable) {
-		t.Errorf("Current with a failing store = %v", err)
+	_, got, err := f.svc.Current(session.ID)
+	if err != nil || !got.IdleExpiresAt.Equal(stored) || !got.ExpiresAt.Equal(stored) {
+		t.Fatalf("Current with a failing store = %+v, %v; want the stored deadline %v", got, err, stored)
+	}
+	// Once the store works again, the renewed deadline is stored and reported.
+	f.store.setErr(nil)
+	f.clock.Advance(time.Minute)
+	if _, got, err = f.svc.Current(session.ID); err != nil || !got.IdleExpiresAt.Equal(f.clock.Now().Add(DefaultIdleTimeout)) {
+		t.Fatalf("Current after the store recovered = %+v, %v", got, err)
 	}
 }
 
