@@ -4,27 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
 	"testing"
 )
 
-func TestLoginKeepsThePreviousSessionWhenTokensFail(t *testing.T) {
-	for _, failing := range []int{1, 2} { // the new session ID, then its CSRF token
-		t.Run(fmt.Sprintf("token %d", failing), func(t *testing.T) {
-			f := newFixture(t, nil)
-			previous := f.login(t) // takes token requests 1 and 2
-			f.tokens.failCall(2 + failing)
-			if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, previous.ID); err == nil {
-				t.Fatal("login succeeded without its tokens")
-			}
-			if _, _, err := f.svc.Authenticate(previous.ID); err != nil {
-				t.Errorf("a failed login ended the previous session: %v", err)
-			}
-			if n := len(f.svc.sessions); n != 1 {
-				t.Errorf("sessions = %d, want only the previous one", n)
-			}
-		})
+func TestLoginKeepsThePreviousSessionWhenTheTokenFails(t *testing.T) {
+	f := newFixture(t, nil)
+	previous := f.login(t) // takes token request 1; the CSRF token is derived from the session token
+	f.tokens.failCall(2)
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, previous.ID, false); err == nil {
+		t.Fatal("login succeeded without its token")
+	}
+	if _, _, err := f.svc.Authenticate(previous.ID); err != nil {
+		t.Errorf("a failed login ended the previous session: %v", err)
+	}
+	if n := len(f.svc.sessions); n != 1 {
+		t.Errorf("sessions = %d, want only the previous one", n)
 	}
 }
 
@@ -51,7 +46,7 @@ func TestLoginCancelledWhileWaitingForTheStateLockCreatesNoSession(t *testing.T)
 	f.hasher.setOnVerify(func() { f.svc.mu.Lock(); close(locked) })
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := f.svc.Login(ctx, "operator", testPassword, previous.ID)
+		_, _, err := f.svc.Login(ctx, "operator", testPassword, previous.ID, false)
 		done <- err
 	}()
 	<-locked

@@ -79,13 +79,13 @@ func TestVerificationCapacity(t *testing.T) {
 	results := make(chan error, 10)
 	for range 10 {
 		go func() {
-			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 			results <- err
 		}()
 	}
 	waitUntil(t, "2 running and 8 queued logins", func() bool { return block.running() == 2 && f.svc.waitingForTest() == 8 })
 
-	_, _, err := f.svc.Login(t.Context(), "operator", testPassword, "")
+	_, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false)
 	var limited *RateLimitError
 	if !errors.As(err, &limited) || !errors.Is(err, ErrLoginRateLimited) || limited.RetryAfter != time.Second {
 		t.Fatalf("eleventh login = %v", err)
@@ -111,7 +111,7 @@ func TestCancelledQueuedLoginCreatesNoSession(t *testing.T) {
 	results := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 			results <- err
 		}()
 	}
@@ -119,7 +119,7 @@ func TestCancelledQueuedLoginCreatesNoSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := make(chan error, 1)
 	go func() {
-		_, _, err := f.svc.Login(ctx, "operator", testPassword, "")
+		_, _, err := f.svc.Login(ctx, "operator", testPassword, "", false)
 		queued <- err
 	}()
 	waitUntil(t, "1 queued login", func() bool { return f.svc.waitingForTest() == 1 })
@@ -146,7 +146,7 @@ func TestPasswordChangeWaitsForSlotWithoutQueueBound(t *testing.T) {
 	results := make(chan error, 3)
 	for range 3 { // 2 running, 1 queued: the login queue is full
 		go func() {
-			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+			_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 			results <- err
 		}()
 	}
@@ -171,7 +171,7 @@ func TestPasswordChangeWaitsForSlotWithoutQueueBound(t *testing.T) {
 func TestFailedLoginThrottle(t *testing.T) {
 	f := newFixture(t, nil)
 	fail := func() error {
-		_, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", "")
+		_, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", "", false)
 		return err
 	}
 	for i := range 4 {
@@ -179,11 +179,11 @@ func TestFailedLoginThrottle(t *testing.T) {
 			t.Fatalf("failure %d = %v", i+1, err)
 		}
 	}
-	if _, _, err := f.svc.Login(t.Context(), "nobody", strings.Repeat("я", 33), ""); !errors.Is(err, ErrInvalidCredentials) {
+	if _, _, err := f.svc.Login(t.Context(), "nobody", strings.Repeat("я", 33), "", false); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("fifth failure = %v", err) // unknown login with an over-long password still counts
 	}
 	verifications := len(f.hasher.verifiedHashes())
-	_, _, err := f.svc.Login(t.Context(), "operator", testPassword, "")
+	_, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false)
 	var limited *RateLimitError
 	if !errors.As(err, &limited) || limited.RetryAfter != 60*time.Second {
 		t.Fatalf("login during cooldown = %v", err)
@@ -192,11 +192,11 @@ func TestFailedLoginThrottle(t *testing.T) {
 		t.Error("cooldown still verified the password")
 	}
 	f.clock.Advance(59*time.Second + 500*time.Millisecond)
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); !errors.As(err, &limited) || limited.RetryAfter != time.Second {
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); !errors.As(err, &limited) || limited.RetryAfter != time.Second {
 		t.Fatalf("near the end of cooldown = %v", err)
 	}
 	f.clock.Advance(500 * time.Millisecond)
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); err != nil {
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
 		t.Fatalf("after cooldown = %v", err)
 	}
 }
@@ -205,7 +205,7 @@ func TestThrottleWindowRollsAndSuccessResets(t *testing.T) {
 	f := newFixture(t, nil)
 	fail := func() {
 		t.Helper()
-		if _, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", ""); !errors.Is(err, ErrInvalidCredentials) {
+		if _, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", "", false); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("failure = %v", err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestThrottleWindowRollsAndSuccessResets(t *testing.T) {
 	for range 4 {
 		fail()
 	}
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); err != nil {
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
 		t.Fatalf("four failures after a success must not throttle: %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestThrottleWindowRollsAndSuccessResets(t *testing.T) {
 func TestCooldownStopsLoginsQueuedBeforeIt(t *testing.T) {
 	f := newFixture(t, nil)
 	for range DefaultFailureLimit - 1 {
-		if _, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", ""); !errors.Is(err, ErrInvalidCredentials) {
+		if _, _, err := f.svc.Login(t.Context(), "operator", "wrong password value", "", false); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("prior failure = %v", err)
 		}
 	}
@@ -240,7 +240,7 @@ func TestCooldownStopsLoginsQueuedBeforeIt(t *testing.T) {
 	f.hasher.setOnVerify(block.hook)
 	before := len(f.hasher.verifiedHashes())
 	login := func(password string, results chan<- error) {
-		_, _, err := f.svc.Login(context.Background(), "operator", password, "")
+		_, _, err := f.svc.Login(context.Background(), "operator", password, "", false)
 		results <- err
 	}
 	results := make(chan error, 10)
@@ -276,6 +276,7 @@ func TestCooldownStopsLoginsQueuedBeforeIt(t *testing.T) {
 func TestWrongCurrentPasswordsRevokeTheSession(t *testing.T) {
 	f := newFixture(t, nil)
 	session, other := f.login(t), f.login(t)
+	before := len(f.store.calls())
 	for i := range DefaultFailureLimit {
 		if err := f.svc.ChangePassword(t.Context(), session.ID, "wrong current value", newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 			t.Fatalf("wrong current password %d = %v", i+1, err)
@@ -290,8 +291,12 @@ func TestWrongCurrentPasswordsRevokeTheSession(t *testing.T) {
 	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
 		t.Errorf("other session revoked: %v", err)
 	}
-	if len(f.store.calls()) != 0 {
-		t.Error("store called for rejected changes")
+	// Only the revocation was stored; the account did not change.
+	if calls := f.store.calls()[before:]; len(calls) != 1 || calls[0] != testAccount() {
+		t.Errorf("commits after the wrong passwords = %+v", calls)
+	}
+	if stored := f.store.last().Sessions; len(stored) != 1 || stored[0].Digest != digestOf(other.ID) {
+		t.Errorf("stored sessions = %+v, want only the other session", stored)
 	}
 }
 
@@ -304,7 +309,7 @@ func TestPasswordChangesDoNotShrinkLoginQueue(t *testing.T) {
 	f.hasher.setOnVerify(block.hook)
 	logins := make(chan error, 10)
 	login := func() {
-		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 		logins <- err
 	}
 	for range 2 {

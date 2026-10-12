@@ -19,7 +19,7 @@ func wantDeadlines(t *testing.T, s Session, idle, absolute time.Time) {
 
 func TestLoginOpensSession(t *testing.T) {
 	f := newFixture(t, nil)
-	profile, session, err := f.svc.Login(t.Context(), "operator", testPassword, "")
+	profile, session, err := f.svc.Login(t.Context(), "operator", testPassword, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestLoginErrorsAreGenericAndAlwaysVerify(t *testing.T) {
 		{"", ""},
 	} {
 		before := len(f.hasher.verifiedHashes())
-		_, _, err := f.svc.Login(t.Context(), attempt.login, attempt.password, "")
+		_, _, err := f.svc.Login(t.Context(), attempt.login, attempt.password, "", false)
 		if !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("Login(%q) error = %v", attempt.login, err)
 		}
@@ -55,7 +55,7 @@ func TestLoginErrorsAreGenericAndAlwaysVerify(t *testing.T) {
 		}
 	}
 	before := len(f.hasher.verifiedHashes())
-	if _, _, err := f.svc.Login(t.Context(), "operator", strings.Repeat("я", 33), ""); !errors.Is(err, ErrInvalidCredentials) || len(f.hasher.verifiedHashes()) != before {
+	if _, _, err := f.svc.Login(t.Context(), "operator", strings.Repeat("я", 33), "", false); !errors.Is(err, ErrInvalidCredentials) || len(f.hasher.verifiedHashes()) != before {
 		t.Errorf("over-long password: %v, verifications %d", err, len(f.hasher.verifiedHashes())-before)
 	}
 	if len(f.svc.sessions) != 0 {
@@ -66,7 +66,7 @@ func TestLoginErrorsAreGenericAndAlwaysVerify(t *testing.T) {
 func TestLoginRotatesSession(t *testing.T) {
 	f := newFixture(t, nil)
 	first := f.login(t)
-	_, second, err := f.svc.Login(t.Context(), "operator", testPassword, first.ID)
+	_, second, err := f.svc.Login(t.Context(), "operator", testPassword, first.ID, false)
 	if err != nil || second.ID == first.ID {
 		t.Fatalf("second = %+v, %v", second, err)
 	}
@@ -83,8 +83,11 @@ func TestAuthenticateRejectsUnknownAndRevoked(t *testing.T) {
 			t.Errorf("Authenticate(%q) = %v", id, err)
 		}
 	}
-	f.svc.Logout(session.ID)
-	f.svc.Logout(session.ID) // idempotent
+	for range 2 { // idempotent
+		if err := f.svc.Logout(session.ID); err != nil {
+			t.Fatalf("Logout = %v", err)
+		}
+	}
 	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("after logout: %v", err)
 	}
@@ -169,7 +172,7 @@ func TestLoginRejectsCredentialChangeDuringVerification(t *testing.T) {
 	f.hasher.setOnVerify(func() { close(entered); <-release })
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 		result <- err
 	}()
 	<-entered
@@ -189,7 +192,7 @@ func TestCancelledLoginCreatesNoSession(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	f.hasher.setOnVerify(cancel)
-	if _, _, err := f.svc.Login(ctx, "operator", testPassword, ""); !errors.Is(err, context.Canceled) {
+	if _, _, err := f.svc.Login(ctx, "operator", testPassword, "", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Login = %v", err)
 	}
 	if len(f.svc.sessions) != 0 {
@@ -222,12 +225,13 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 		"failure limit":   func(o *Options, _ *Account) { o.FailureLimit = 0 },
 		"failure window":  func(o *Options, _ *Account) { o.FailureWindow = 0 },
 		"cooldown":        func(o *Options, _ *Account) { o.Cooldown = 0 },
+		"remember":        func(o *Options, _ *Account) { o.RememberTimeout = 0 },
 		"account":         func(_ *Options, a *Account) { a.CredentialVersion = 0 },
 		"hash format":     func(_ *Options, a *Account) { a.PasswordHash = "plain" },
 	} {
 		opts, account := valid(), testAccount()
 		change(&opts, &account)
-		if _, err := NewService(account, opts); err == nil {
+		if _, err := NewService(State{Account: account}, opts); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

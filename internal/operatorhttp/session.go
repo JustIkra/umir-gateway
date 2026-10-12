@@ -48,7 +48,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		a.problem(w, r, http.StatusBadRequest, "InvalidRequest", "login and password are required")
 		return
 	}
-	profile, session, err := a.accounts.Login(r.Context(), *body.Login, *body.Password, sessionID)
+	profile, session, err := a.accounts.Login(r.Context(), *body.Login, *body.Password, sessionID, body.RememberMe)
 	if err != nil {
 		a.fail(w, r, err, "")
 		return
@@ -58,7 +58,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		a.clearCookie(w, a.cookies.preauth)
 	}
 	var expires time.Time
-	if body.RememberMe {
+	if session.RememberMe {
 		expires = session.AbsoluteExpiresAt
 	}
 	a.setCookie(w, a.cookies.session, session.ID, expires)
@@ -91,14 +91,17 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		a.problem(w, r, http.StatusForbidden, "InvalidCsrfToken", "CSRF token is missing or invalid")
 		return
 	}
-	a.accounts.Logout(sessionID)
+	if err := a.accounts.Logout(sessionID); err != nil {
+		a.fail(w, r, err, "")
+		return
+	}
 	a.clearCookie(w, a.cookies.session)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // me returns the profile and session; like every authenticated request, it extends the idle deadline.
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	profile, session, err := a.accounts.Authenticate(a.cookie(r, a.cookies.session))
+	profile, session, err := a.accounts.Current(a.cookie(r, a.cookies.session))
 	if err != nil {
 		a.fail(w, r, err, "")
 		return

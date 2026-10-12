@@ -14,11 +14,12 @@ const newPassword = "new correct horse battery staple" // 32 code points
 func TestUpdateDisplayName(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
+	before := len(f.store.calls())
 	profile, err := f.svc.UpdateDisplayName(session.ID, "  Смена\u00a0 ")
 	if err != nil || profile.DisplayName != "Смена" {
 		t.Fatalf("UpdateDisplayName = %+v, %v", profile, err)
 	}
-	calls := f.store.calls()
+	calls := f.store.calls()[before:]
 	if len(calls) != 1 || calls[0].DisplayName != "Смена" || calls[0].CredentialVersion != 1 {
 		t.Fatalf("store calls = %+v", calls)
 	}
@@ -30,12 +31,13 @@ func TestUpdateDisplayName(t *testing.T) {
 func TestUpdateDisplayNameRejectsBeforeStorage(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
+	before := len(f.store.calls())
 	_, err := f.svc.UpdateDisplayName(session.ID, "Я")
 	wantFieldError(t, err, "displayName", CodeTooShort)
 	if _, err := f.svc.UpdateDisplayName("unknown", "Смена"); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("unknown session: %v", err)
 	}
-	if len(f.store.calls()) != 0 {
+	if len(f.store.calls()) != before {
 		t.Errorf("store called for rejected input")
 	}
 }
@@ -55,7 +57,7 @@ func TestDefiniteStorageFailureChangesNothing(t *testing.T) {
 		t.Fatalf("after failures: %+v, %v", profile, err)
 	}
 	f.store.setErr(nil)
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); err != nil {
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
 		t.Errorf("old password stopped working: %v", err)
 	}
 }
@@ -77,7 +79,7 @@ func TestUnknownOutcomeEntersRecovery(t *testing.T) {
 			if _, _, err := f.svc.Authenticate(other.ID); !errors.Is(err, ErrAuthUnavailable) {
 				t.Errorf("Authenticate = %v", err)
 			}
-			if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); !errors.Is(err, ErrAuthUnavailable) {
+			if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); !errors.Is(err, ErrAuthUnavailable) {
 				t.Errorf("Login = %v", err)
 			}
 			if _, err := f.svc.UpdateDisplayName(other.ID, "Смена"); !errors.Is(err, ErrAuthUnavailable) {
@@ -96,10 +98,11 @@ func TestUnknownOutcomeEntersRecovery(t *testing.T) {
 func TestChangePasswordRevokesEverySession(t *testing.T) {
 	f := newFixture(t, nil)
 	session, other := f.login(t), f.login(t)
+	before := len(f.store.calls())
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); err != nil {
 		t.Fatal(err)
 	}
-	calls := f.store.calls()
+	calls := f.store.calls()[before:]
 	if len(calls) != 1 || calls[0].PasswordHash != fakeHash(newPassword) || calls[0].CredentialVersion != 2 {
 		t.Fatalf("store calls = %+v", calls)
 	}
@@ -108,10 +111,10 @@ func TestChangePasswordRevokesEverySession(t *testing.T) {
 			t.Errorf("session survived: %v", err)
 		}
 	}
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, ""); !errors.Is(err, ErrInvalidCredentials) {
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("old password: %v", err)
 	}
-	if _, _, err := f.svc.Login(t.Context(), "operator", newPassword, ""); err != nil {
+	if _, _, err := f.svc.Login(t.Context(), "operator", newPassword, "", false); err != nil {
 		t.Errorf("new password: %v", err)
 	}
 }
@@ -119,6 +122,7 @@ func TestChangePasswordRevokesEverySession(t *testing.T) {
 func TestChangePasswordRejections(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
+	before := len(f.store.calls())
 	if err := f.svc.ChangePassword(t.Context(), session.ID, "wrong current password", newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Errorf("wrong current: %v", err)
 	}
@@ -136,7 +140,7 @@ func TestChangePasswordRejections(t *testing.T) {
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.Is(err, ErrStorageUnavailable) {
 		t.Errorf("hash failure: %v", err)
 	}
-	if len(f.store.calls()) != 0 {
+	if len(f.store.calls()) != before {
 		t.Errorf("store called for rejected change")
 	}
 	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
@@ -147,19 +151,20 @@ func TestChangePasswordRejections(t *testing.T) {
 func TestPasswordIsStoredAndVerifiedRaw(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
+	before := len(f.store.calls())
 	decomposed := " pass e\u0301e\u0301 word " // spaces and a decomposed é are part of the password
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, decomposed); err != nil {
 		t.Fatal(err)
 	}
-	if calls := f.store.calls(); len(calls) != 1 || calls[0].PasswordHash != fakeHash(decomposed) {
+	if calls := f.store.calls()[before:]; len(calls) != 1 || calls[0].PasswordHash != fakeHash(decomposed) {
 		t.Fatalf("stored = %+v", calls)
 	}
 	for _, variant := range []string{"pass e\u0301e\u0301 word", " pass \u00e9\u00e9 word "} {
-		if _, _, err := f.svc.Login(t.Context(), "operator", variant, ""); !errors.Is(err, ErrInvalidCredentials) {
+		if _, _, err := f.svc.Login(t.Context(), "operator", variant, "", false); !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("Login(%q) = %v", variant, err)
 		}
 	}
-	if _, _, err := f.svc.Login(t.Context(), "operator", decomposed, ""); err != nil {
+	if _, _, err := f.svc.Login(t.Context(), "operator", decomposed, "", false); err != nil {
 		t.Errorf("exact password: %v", err)
 	}
 }
@@ -172,7 +177,7 @@ func TestLoginDuringPasswordChangeGetsNoStaleSession(t *testing.T) {
 	f.hasher.setOnVerify(func() { once.Do(func() { close(entered); <-release }) })
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "")
+		_, _, err := f.svc.Login(context.Background(), "operator", testPassword, "", false)
 		result <- err
 	}()
 	<-entered
@@ -192,6 +197,7 @@ func TestLoginDuringPasswordChangeGetsNoStaleSession(t *testing.T) {
 func TestConcurrentPasswordChangesCommitOnce(t *testing.T) {
 	f := newFixture(t, nil)
 	first, second := f.login(t), f.login(t)
+	before := len(f.store.calls())
 	errs := make(chan error, 2)
 	for _, id := range []string{first.ID, second.ID} {
 		go func() { errs <- f.svc.ChangePassword(context.Background(), id, testPassword, newPassword) }()
@@ -207,7 +213,7 @@ func TestConcurrentPasswordChangesCommitOnce(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	}
-	if ok != 1 || unauthenticated != 1 || len(f.store.calls()) != 1 {
-		t.Fatalf("ok=%d unauthenticated=%d commits=%d", ok, unauthenticated, len(f.store.calls()))
+	if commits := len(f.store.calls()) - before; ok != 1 || unauthenticated != 1 || commits != 1 {
+		t.Fatalf("ok=%d unauthenticated=%d commits=%d", ok, unauthenticated, commits)
 	}
 }

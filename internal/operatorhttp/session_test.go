@@ -3,6 +3,7 @@ package operatorhttp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -296,20 +297,25 @@ func TestRecoveryAllowsOnlyAnonymousCSRFAndLogout(t *testing.T) {
 	wantProblem(t, login, http.StatusServiceUnavailable, "AuthUnavailable")
 	wantProblem(t, f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}),
 		http.StatusServiceUnavailable, "AuthUnavailable")
+	// The stored state is not authoritative during recovery: a session cannot be shown to be logged out.
 	logout := f.do(call{
 		method: http.MethodDelete, path: "/api/operator/session",
 		cookies: []*http.Cookie{session, preauth}, csrf: anonymous, origin: testOrigin,
 	})
-	if logout.Code != http.StatusNoContent {
-		t.Errorf("logout during recovery: %d %s", logout.Code, logout.Body)
+	wantProblem(t, logout, http.StatusServiceUnavailable, "AuthUnavailable")
+	if w := f.do(call{
+		method: http.MethodDelete, path: "/api/operator/session",
+		cookies: []*http.Cookie{preauth}, csrf: anonymous, origin: testOrigin,
+	}); w.Code != http.StatusNoContent {
+		t.Errorf("logout without a session during recovery: %d %s", w.Code, w.Body)
 	}
 }
 
-func TestRememberMeKeepsTheCookieUntilTheAbsoluteDeadline(t *testing.T) {
+func TestRememberMeKeepsTheCookieForThirtyDays(t *testing.T) {
 	f := loopbackFixture(t)
 	for _, tc := range []struct {
 		name, extra string
-		persistent  bool
+		remembered  bool
 	}{
 		{"remember me", `,"rememberMe":true`, true},
 		{"explicitly not", `,"rememberMe":false`, false},
@@ -323,16 +329,20 @@ func TestRememberMeKeepsTheCookieUntilTheAbsoluteDeadline(t *testing.T) {
 				cookies: []*http.Cookie{preauth}, csrf: token, origin: testOrigin,
 			})
 			session := cookiesOf(t, w)["umir_operator_session"]
-			if w.Code != http.StatusOK || session == nil {
+			var body accountView
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK || session == nil || body.Session == nil {
 				t.Fatalf("login: %d %s", w.Code, w.Body)
 			}
-			// The server deadlines do not change; only the browser keeps the cookie across restarts.
-			if persistent := !session.Expires.IsZero(); persistent != tc.persistent ||
-				tc.persistent && !session.Expires.Equal(f.clock.Now().Add(operator.DefaultAbsoluteTimeout)) {
-				t.Errorf("Expires = %v, want persistent %v", session.Expires, tc.persistent)
-			}
-			if session.MaxAge != 0 {
-				t.Errorf("Max-Age = %d", session.MaxAge)
+			deadline := f.clock.Now().Add(operator.DefaultRememberTimeout)
+			if tc.remembered {
+				if !session.Expires.Equal(deadline) || session.MaxAge != 30*24*60*60 {
+					t.Errorf("cookie Expires %v, Max-Age %d; want %v and 2592000", session.Expires, session.MaxAge, deadline)
+				}
+				if !body.Session.RememberMe || body.Session.AbsoluteExpiresAt != timestamp(deadline) || body.Session.ExpiresAt != body.Session.AbsoluteExpiresAt {
+					t.Errorf("session = %+v", body.Session)
+				}
+			} else if !session.Expires.IsZero() || session.MaxAge != 0 || body.Session.RememberMe {
+				t.Errorf("ordinary login: cookie Expires %v, Max-Age %d, session %+v", session.Expires, session.MaxAge, body.Session)
 			}
 		})
 	}
@@ -342,6 +352,32 @@ func TestRememberMeKeepsTheCookieUntilTheAbsoluteDeadline(t *testing.T) {
 		body:    `{"login":"operator","password":"` + testPassword + `","rememberMe":"yes"}`,
 		cookies: []*http.Cookie{preauth}, csrf: token, origin: testOrigin,
 	}), http.StatusBadRequest, "InvalidRequest")
+}
+
+func TestSessionStorageFailures(t *testing.T) {
+	f := loopbackFixture(t)
+	session, token := f.login()
+	logout := call{method: http.MethodDelete, path: "/api/operator/session", cookies: []*http.Cookie{session}, csrf: token, origin: testOrigin}
+	f.store.fail(fmt.Errorf("disk full: %w", operator.ErrStorageUnavailable))
+	// No cookie is issued for a session that was not stored.
+	login := f.signIn(testPassword)
+	wantProblem(t, login, http.StatusServiceUnavailable, "SessionStorageUnavailable")
+	if _, ok := cookiesOf(t, login)["umir_operator_session"]; ok {
+		t.Error("a session cookie was issued without a stored session")
+	}
+	// A logout that was not stored keeps the cookie, and the session stays valid.
+	w := f.do(logout)
+	wantProblem(t, w, http.StatusServiceUnavailable, "SessionStorageUnavailable")
+	if len(w.Header().Values("Set-Cookie")) != 0 {
+		t.Errorf("cookie changed by a failed logout: %v", w.Header().Values("Set-Cookie"))
+	}
+	// /me renews the ordinary idle deadline, which must be stored first.
+	wantProblem(t, f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}),
+		http.StatusServiceUnavailable, "SessionStorageUnavailable")
+	f.store.fail(errors.New("rename outcome unknown"))
+	wantProblem(t, f.do(logout), http.StatusServiceUnavailable, "SessionUpdateOutcomeUnknown")
+	wantProblem(t, f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}),
+		http.StatusServiceUnavailable, "AuthUnavailable")
 }
 
 func TestUnauthorizedResponsesCarryAChallenge(t *testing.T) {

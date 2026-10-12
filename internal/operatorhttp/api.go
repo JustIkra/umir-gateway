@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
 )
@@ -29,8 +30,11 @@ type Accounts interface {
 	CheckAnonymousCSRF(id, token string) bool
 	DiscardAnonymous(id string)
 	SessionCSRF(id string) (string, bool)
-	Login(ctx context.Context, login, password, previousID string) (operator.Profile, operator.Session, error)
-	Logout(id string)
+	Login(ctx context.Context, login, password, previousID string, rememberMe bool) (operator.Profile, operator.Session, error)
+	// Current returns the operator's own view; an ordinary session's renewed deadline is stored first.
+	Current(id string) (operator.Profile, operator.Session, error)
+	// Logout stores the revocation before it succeeds.
+	Logout(id string) error
 	UpdateDisplayName(id, raw string) (operator.Profile, error)
 	ChangePassword(ctx context.Context, id, current, next string) error
 }
@@ -50,6 +54,8 @@ type Options struct {
 	PublicOrigin string
 	// Logger receives request IDs, routes and error codes, never credentials or bodies.
 	Logger *log.Logger
+	// Now gives the Max-Age of a remembered session cookie.
+	Now func() time.Time
 }
 
 // API serves /api/operator/ and guards business routes.
@@ -59,13 +65,14 @@ type API struct {
 	secure   bool
 	origin   string
 	logger   *log.Logger
+	now      func() time.Time
 }
 
 func New(opts Options) (*API, error) {
-	if opts.Accounts == nil || opts.Logger == nil {
-		return nil, errors.New("operatorhttp: accounts and logger are required")
+	if opts.Accounts == nil || opts.Logger == nil || opts.Now == nil {
+		return nil, errors.New("operatorhttp: accounts, logger and clock are required")
 	}
-	api := &API{accounts: opts.Accounts, origin: opts.PublicOrigin, logger: opts.Logger}
+	api := &API{accounts: opts.Accounts, origin: opts.PublicOrigin, logger: opts.Logger, now: opts.Now}
 	switch {
 	case opts.Mode == ModeSecure && strings.HasPrefix(opts.PublicOrigin, "https://"):
 		api.secure, api.cookies = true, secureCookies

@@ -52,16 +52,16 @@ func (s *Service) DiscardAnonymous(id string) {
 	delete(s.anonymous, id)
 }
 
-// SessionCSRF returns the CSRF token of a live session for logout. It neither extends the session nor
-// authorizes anything else. Recovery clears sessions, so logout then uses an anonymous context.
+// SessionCSRF returns the CSRF token of a live session. It neither extends the session nor authorizes
+// anything else. Recovery clears sessions, so logout then uses an anonymous context.
 func (s *Service) SessionCSRF(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.sessions[id]
-	if !ok || s.expired(st, s.opts.Now()) || st.credentialVersion != s.account.CredentialVersion {
+	st, ok := s.sessions[sessionDigest(id)]
+	if !ok || id == "" || s.expired(st, s.opts.Now()) || st.credentialVersion != s.account.CredentialVersion {
 		return "", false
 	}
-	return st.csrfToken, true
+	return sessionCSRF(id), true
 }
 
 // MatchToken compares tokens in constant time; an empty token never matches.

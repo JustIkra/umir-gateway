@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,7 +97,7 @@ func (h *fakeHasher) verifiedHashes() []string {
 type fakeStore struct {
 	mu       sync.Mutex
 	err      error
-	replaced []Account
+	replaced []State
 }
 
 func (s *fakeStore) Replace(next State) error {
@@ -105,8 +106,23 @@ func (s *fakeStore) Replace(next State) error {
 	if s.err != nil {
 		return s.err
 	}
-	s.replaced = append(s.replaced, next.Account)
+	next.Sessions = slices.Clone(next.Sessions)
+	s.replaced = append(s.replaced, next)
 	return nil
+}
+
+// states returns every committed state; last returns the newest one, or the initial empty state.
+func (s *fakeStore) states() []State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.replaced)
+}
+
+func (s *fakeStore) last() State {
+	if states := s.states(); len(states) > 0 {
+		return states[len(states)-1]
+	}
+	return State{Account: testAccount()}
 }
 
 func testAccount() Account {
@@ -119,6 +135,7 @@ type fixture struct {
 	hasher *fakeHasher
 	store  *fakeStore
 	tokens *tokens
+	opts   Options
 }
 
 func newFixture(t *testing.T, change func(*Options)) fixture {
@@ -132,21 +149,32 @@ func newFixture(t *testing.T, change func(*Options)) fixture {
 		MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
 		MaxVerifications: DefaultMaxVerifications, MaxQueuedLogins: DefaultMaxQueuedLogins,
 		FailureLimit: DefaultFailureLimit, FailureWindow: DefaultFailureWindow, Cooldown: DefaultCooldown,
+		RememberTimeout: DefaultRememberTimeout,
 	}
 	if change != nil {
 		change(&opts)
 	}
-	svc, err := NewService(testAccount(), opts)
+	svc, err := NewService(State{Account: testAccount()}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.svc = svc
+	f.svc, f.opts = svc, opts
 	return f
+}
+
+// restart starts a new service from the last committed state, as a gateway restart would.
+func (f fixture) restart(t *testing.T) *Service {
+	t.Helper()
+	svc, err := NewService(f.store.last(), f.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
 }
 
 func (f fixture) login(t *testing.T) Session {
 	t.Helper()
-	_, session, err := f.svc.Login(t.Context(), "operator", testPassword, "")
+	_, session, err := f.svc.Login(t.Context(), "operator", testPassword, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +183,9 @@ func (f fixture) login(t *testing.T) Session {
 func (s *fakeStore) setErr(err error) { s.mu.Lock(); defer s.mu.Unlock(); s.err = err }
 
 func (s *fakeStore) calls() []Account {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]Account(nil), s.replaced...)
+	var accounts []Account
+	for _, state := range s.states() {
+		accounts = append(accounts, state.Account)
+	}
+	return accounts
 }

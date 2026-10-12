@@ -48,9 +48,9 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("operator account: %w", err)
 	}
-	return operator.NewService(state.Account, operator.Options{
+	return operator.NewService(state, operator.Options{
 		Store: store, Hasher: hasher, Now: time.Now, NewToken: newToken,
-		IdleTimeout: cfg.IdleTimeout, AbsoluteTimeout: cfg.AbsoluteTimeout,
+		IdleTimeout: cfg.IdleTimeout, AbsoluteTimeout: cfg.AbsoluteTimeout, RememberTimeout: operator.DefaultRememberTimeout,
 		MaxSessions: operator.DefaultMaxSessions, MaxAnonymous: operator.DefaultMaxAnonymous,
 		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
@@ -82,7 +82,7 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 	}
 	api, err := operatorhttp.New(operatorhttp.Options{
 		Accounts: accounts, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode),
-		PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger,
+		PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now,
 	})
 	if err != nil {
 		return nil, err

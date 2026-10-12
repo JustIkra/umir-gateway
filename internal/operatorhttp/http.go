@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"time"
@@ -39,12 +40,17 @@ func (a *API) cookie(r *http.Request, name string) string {
 }
 
 // setCookie sets an operator cookie. A zero expires makes it a browser-session cookie, removed when the
-// browser closes; the server enforces the session deadlines either way.
+// browser closes; otherwise it carries the fixed deadline as Expires and the remaining seconds as
+// Max-Age. The server enforces the session deadlines either way.
 func (a *API) setCookie(w http.ResponseWriter, name, value string, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: value, Path: "/", Expires: expires,
-		Secure: a.secure, HttpOnly: true, SameSite: http.SameSiteStrictMode,
-	})
+	cookie := &http.Cookie{
+		Name: name, Value: value, Path: "/", Secure: a.secure, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+	}
+	if !expires.IsZero() {
+		cookie.Expires = expires
+		cookie.MaxAge = max(1, int(math.Ceil(expires.Sub(a.now()).Seconds())))
+	}
+	http.SetCookie(w, cookie)
 }
 
 func (a *API) clearCookie(w http.ResponseWriter, name string) {

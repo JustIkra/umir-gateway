@@ -47,9 +47,10 @@ func (fakeHasher) Check(encoded string) error {
 
 // fakeStore records committed accounts; after fail, every commit returns that error.
 type fakeStore struct {
-	mu    sync.Mutex
-	err   error
-	saved []operator.Account
+	mu      sync.Mutex
+	err     error
+	initial operator.Account
+	saved   []operator.Account
 }
 
 func (s *fakeStore) Replace(next operator.State) error {
@@ -88,10 +89,11 @@ func newFixture(t *testing.T, mode CookieMode, origin string) *fixture {
 	f := &fixture{t: t, origin: origin, store: &fakeStore{}, clock: &clock{now: start}, logs: &bytes.Buffer{}}
 	var mu sync.Mutex
 	issued := 0
-	accounts, err := operator.NewService(operator.Account{
+	f.store.initial = operator.Account{
 		ProfileID: "PROFILE1", Login: "operator", DisplayName: "Оператор",
 		PasswordHash: fakeHash(testPassword), CredentialVersion: 1,
-	}, operator.Options{
+	}
+	accounts, err := operator.NewService(operator.State{Account: f.store.initial}, operator.Options{
 		Store: f.store, Hasher: fakeHasher{}, Now: f.clock.Now,
 		NewToken: func() (string, error) {
 			mu.Lock()
@@ -104,11 +106,12 @@ func newFixture(t *testing.T, mode CookieMode, origin string) *fixture {
 		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
 		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
+		RememberTimeout: operator.DefaultRememberTimeout,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	api, err := New(Options{Accounts: accounts, Mode: mode, PublicOrigin: origin, Logger: log.New(f.logs, "", 0)})
+	api, err := New(Options{Accounts: accounts, Mode: mode, PublicOrigin: origin, Logger: log.New(f.logs, "", 0), Now: f.clock.Now})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,17 +6,25 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
 )
 
+// commits returns the committed accounts that changed the account; session-only commits are skipped.
 func (s *fakeStore) commits() []operator.Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.saved)
+	var changes []operator.Account
+	previous := s.initial
+	for _, account := range s.saved {
+		if account != previous {
+			changes = append(changes, account)
+		}
+		previous = account
+	}
+	return changes
 }
 
 const newPassword = "new correct horse battery staple"
@@ -93,6 +101,7 @@ func TestUpdateDisplayNameStorageOutcomes(t *testing.T) {
 	wantProblem(t, f.patch("/api/operator/me/display-name", `{"displayName":"Смена"}`, session, token),
 		http.StatusServiceUnavailable, "AccountStorageUnavailable")
 	// A definite failure changed nothing: the session still works.
+	f.store.fail(nil)
 	if me := f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}); me.Code != http.StatusOK {
 		t.Fatalf("me after a definite failure: %d", me.Code)
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -15,6 +16,8 @@ const (
 	DefaultIdleTimeout     = 30 * time.Minute
 	DefaultAbsoluteTimeout = 8 * time.Hour
 	DefaultMaxSessions     = 32
+	// DefaultRememberTimeout is the fixed lifetime of a "remember me" login (gateway#8).
+	DefaultRememberTimeout = 30 * 24 * time.Hour
 	// The anonymous bound and lifetime are implementation defaults, not gateway#8 values.
 	DefaultMaxAnonymous = 1024
 	DefaultAnonymousTTL = 30 * time.Minute
@@ -33,13 +36,16 @@ type Options struct {
 	Store  Store
 	Hasher PasswordHasher
 	Now    func() time.Time
-	// NewToken returns an unpredictable URL-safe token for session IDs and CSRF tokens.
+	// NewToken returns an unpredictable URL-safe token for session and anonymous context IDs.
 	NewToken        func() (string, error)
 	IdleTimeout     time.Duration
 	AbsoluteTimeout time.Duration
-	MaxSessions     int
-	MaxAnonymous    int
-	AnonymousTTL    time.Duration
+	// RememberTimeout is the fixed lifetime of a remembered login; activity never extends it.
+	RememberTimeout time.Duration
+	// MaxSessions bounds ordinary and remembered sessions together.
+	MaxSessions  int
+	MaxAnonymous int
+	AnonymousTTL time.Duration
 	// MaxVerifications bounds concurrent Argon2id work; MaxQueuedLogins bounds logins waiting for it.
 	MaxVerifications int
 	MaxQueuedLogins  int
@@ -49,31 +55,24 @@ type Options struct {
 	Cooldown      time.Duration
 }
 
-// Session is what the HTTP layer needs about an authenticated session.
+// Session is what the HTTP layer needs about an authenticated session. ID is the bearer token for the
+// cookie; the service itself keeps only its digest.
 type Session struct {
 	ID        string
 	CSRFToken string
 	// ExpiresAt is the earlier of the idle and absolute deadlines.
 	ExpiresAt time.Time
-	// IdleExpiresAt moves with every authenticated request but never past AbsoluteExpiresAt, which is fixed
-	// at login. The frontend warns before both and extends only on a user action.
+	// IdleExpiresAt moves with authenticated requests of an ordinary session but never past
+	// AbsoluteExpiresAt, which is fixed at login. A remembered session has no earlier idle deadline.
 	IdleExpiresAt     time.Time
 	AbsoluteExpiresAt time.Time
+	RememberMe        bool
 }
 
-type session struct {
-	csrfToken         string
-	credentialVersion int64
-	created           time.Time
-	lastSeen          time.Time
-	// wrongCurrent counts wrong current passwords in password changes made with this session.
-	wrongCurrent int
-}
-
-// Service owns the account cache, sessions and recovery mode. One mutex guards all of them, and account
-// commits happen under it, so no request sees a committed account together with stale sessions.
-// Expensive password work runs outside the mutex. The service starts no goroutines; expired state is
-// removed when it is touched or when a new entry needs room.
+// Service owns the account cache, sessions and recovery mode. One mutex guards all of them, and every
+// commit happens under it, so no request sees a committed state together with stale sessions. Expensive
+// password work runs outside the mutex. The service starts no goroutines; expired state is removed when
+// it is touched or when a commit is prepared.
 type Service struct {
 	opts Options
 	gate *verificationGate
@@ -83,41 +82,49 @@ type Service struct {
 	mu         sync.Mutex
 	account    Account
 	recovering bool
-	sessions   map[string]*session
-	anonymous  map[string]*anonymousContext
-	throttle   loginThrottle
+	// sessions are keyed by token digest and mirror the last committed state, except that ordinary idle
+	// activity of business requests is stored with the next commit.
+	sessions  map[string]*session
+	anonymous map[string]*anonymousContext
+	throttle  loginThrottle
 }
 
-func NewService(account Account, opts Options) (*Service, error) {
+// NewService starts from the persisted state. Stored sessions that expired or belong to an older
+// credential version are not restored.
+func NewService(state State, opts Options) (*Service, error) {
 	if opts.Store == nil || opts.Hasher == nil || opts.Now == nil || opts.NewToken == nil {
 		return nil, errors.New("operator: store, hasher, clock and token source are required")
 	}
-	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.MaxSessions <= 0 || opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 ||
-		opts.MaxVerifications <= 0 || opts.MaxQueuedLogins <= 0 || opts.FailureLimit <= 0 || opts.FailureWindow <= 0 || opts.Cooldown <= 0 {
+	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.RememberTimeout <= 0 || opts.MaxSessions <= 0 ||
+		opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 || opts.MaxVerifications <= 0 || opts.MaxQueuedLogins <= 0 ||
+		opts.FailureLimit <= 0 || opts.FailureWindow <= 0 || opts.Cooldown <= 0 {
 		return nil, errors.New("operator: session timeouts and bounds must be positive")
 	}
-	if err := ValidateAccount(account); err != nil {
+	if err := ValidateState(state); err != nil {
 		return nil, err
 	}
-	if err := opts.Hasher.Check(account.PasswordHash); err != nil {
+	if err := opts.Hasher.Check(state.Account.PasswordHash); err != nil {
 		return nil, fmt.Errorf("account passwordHash: %w", err)
 	}
-	return &Service{
+	s := &Service{
 		opts:      opts,
 		changing:  make(chan struct{}, 1),
-		account:   account,
+		account:   state.Account,
 		sessions:  make(map[string]*session),
 		anonymous: make(map[string]*anonymousContext),
 		gate:      newVerificationGate(opts.MaxVerifications, opts.MaxQueuedLogins),
 		throttle:  loginThrottle{failures: make([]time.Time, 0, opts.FailureLimit)},
-	}, nil
+	}
+	s.restore(state.Sessions)
+	return s, nil
 }
 
-// Login verifies the credentials and opens a new session; previousID, when present, is revoked.
-// An unknown login is verified against the account's own hash and the result discarded, so timing and
-// errors do not reveal whether the login exists, whatever parameters that hash carries.
-// A credential change during verification rejects the attempt.
-func (s *Service) Login(ctx context.Context, login, password, previousID string) (Profile, Session, error) {
+// Login verifies the credentials and opens a new session, remembered for RememberTimeout or ordinary.
+// The session is stored before it is returned; previousID, when present, is revoked in the same commit,
+// and a failed commit keeps it. An unknown login is verified against the account's own hash and the
+// result discarded, so timing and errors do not reveal whether the login exists, whatever parameters
+// that hash carries. A credential change during verification rejects the attempt.
+func (s *Service) Login(ctx context.Context, login, password, previousID string, rememberMe bool) (Profile, Session, error) {
 	s.mu.Lock()
 	if s.recovering {
 		s.mu.Unlock()
@@ -158,23 +165,36 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string)
 	if err := ctx.Err(); err != nil {
 		return Profile{}, Session{}, err
 	}
-	now := s.opts.Now()
-	id, csrf, err := s.newPairLocked()
+	token, err := s.newTokenLocked()
 	if err != nil {
 		return Profile{}, Session{}, err
 	}
-	// The previous session ends only once its replacement exists.
-	s.throttle.failures = s.throttle.failures[:0]
+	now := s.opts.Now()
+	next := maps.Clone(s.sessions)
 	if previousID != "" {
-		delete(s.sessions, previousID)
+		delete(next, sessionDigest(previousID))
 	}
-	s.makeRoomLocked(now)
-	st := &session{csrfToken: csrf, credentialVersion: s.account.CredentialVersion, created: now, lastSeen: now}
-	s.sessions[id] = st
-	return s.account.Profile(), s.view(id, st), nil
+	for digest, st := range next {
+		if s.expired(st, now) {
+			delete(next, digest)
+		}
+	}
+	evictOldest(next, s.opts.MaxSessions-1)
+	st := &session{rememberMe: rememberMe, credentialVersion: s.account.CredentialVersion, created: now, lastSeen: now}
+	st.expires = now.Add(s.opts.AbsoluteTimeout)
+	if rememberMe {
+		st.expires = now.Add(s.opts.RememberTimeout)
+	}
+	next[sessionDigest(token)] = st
+	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
+		return Profile{}, Session{}, err
+	}
+	s.throttle.failures = s.throttle.failures[:0]
+	return s.account.Profile(), s.view(token, st), nil
 }
 
-// Authenticate returns the profile and session for id and extends its idle deadline.
+// Authenticate admits a safe request of session id. Ordinary idle activity is kept in memory and stored
+// with the next commit; nothing is written here.
 func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,11 +217,35 @@ func (s *Service) Authorize(id, csrfToken string) (Profile, Session, error) {
 	if err != nil {
 		return Profile{}, Session{}, err
 	}
-	if !MatchToken(st.csrfToken, csrfToken) {
+	if !MatchToken(sessionCSRF(id), csrfToken) {
 		return Profile{}, Session{}, ErrInvalidCSRFToken
 	}
 	st.lastSeen = now
 	return s.account.Profile(), s.view(id, st), nil
+}
+
+// Current returns the profile and session for the operator's own view. An ordinary session's renewed
+// idle deadline is stored before it is reported; a remembered session has nothing to renew.
+func (s *Service) Current(id string) (Profile, Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.opts.Now()
+	st, err := s.activeLocked(id, now)
+	if err != nil {
+		return Profile{}, Session{}, err
+	}
+	if st.rememberMe {
+		st.lastSeen = now
+		return s.account.Profile(), s.view(id, st), nil
+	}
+	next := maps.Clone(s.sessions)
+	renewed := *st
+	renewed.lastSeen = now
+	next[sessionDigest(id)] = &renewed
+	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
+		return Profile{}, Session{}, err
+	}
+	return s.account.Profile(), s.view(id, &renewed), nil
 }
 
 // verifyLogin checks a login inside a verification slot. The cooldown is checked again after the wait,
@@ -244,69 +288,34 @@ func (s *Service) verify(ctx context.Context, password, encoded string) (bool, e
 	return ok, nil
 }
 
-// Logout revokes id. It works during recovery, which blocks only authentication.
-func (s *Service) Logout(id string) {
+// Logout revokes id and stores the revocation before it reports success. An absent or already invalid
+// session needs nothing stored. During recovery the stored state is not authoritative, so only a
+// request without a session can succeed.
+func (s *Service) Logout(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, id)
-}
-
-func (s *Service) activeLocked(id string, now time.Time) (*session, error) {
 	if s.recovering {
-		return nil, ErrAuthUnavailable
+		if id == "" {
+			return nil
+		}
+		return ErrAuthUnavailable
 	}
-	st, ok := s.sessions[id]
-	if !ok {
-		return nil, ErrUnauthenticated
+	digest := sessionDigest(id)
+	if _, ok := s.sessions[digest]; !ok || id == "" {
+		return nil
 	}
-	if s.expired(st, now) || st.credentialVersion != s.account.CredentialVersion {
-		delete(s.sessions, id)
-		return nil, ErrUnauthenticated
-	}
-	return st, nil
+	next := maps.Clone(s.sessions)
+	delete(next, digest)
+	return s.commitLocked(s.account, next, sessionChange)
 }
 
-// expired measures the absolute deadline from creation, so a clock moving backwards cannot extend it.
-func (s *Service) expired(st *session, now time.Time) bool {
-	return !now.Before(st.lastSeen.Add(s.opts.IdleTimeout)) || !now.Before(st.created.Add(s.opts.AbsoluteTimeout))
-}
-
-func (s *Service) view(id string, st *session) Session {
-	idle, absolute := st.lastSeen.Add(s.opts.IdleTimeout), st.created.Add(s.opts.AbsoluteTimeout)
-	if absolute.Before(idle) {
-		idle = absolute
-	}
-	return Session{ID: id, CSRFToken: st.csrfToken, ExpiresAt: idle, IdleExpiresAt: idle, AbsoluteExpiresAt: absolute}
-}
-
-func (s *Service) newPairLocked() (id, csrf string, err error) {
-	if id, err = s.opts.NewToken(); err == nil {
-		csrf, err = s.opts.NewToken()
-	}
+func (s *Service) newTokenLocked() (string, error) {
+	token, err := s.opts.NewToken()
 	if err != nil {
-		return "", "", fmt.Errorf("session token: %w", err)
+		return "", fmt.Errorf("session token: %w", err)
 	}
-	if _, taken := s.sessions[id]; taken || id == "" || csrf == "" || id == csrf {
-		return "", "", errors.New("session token: unusable token")
+	if _, taken := s.sessions[sessionDigest(token)]; taken || token == "" {
+		return "", errors.New("session token: unusable token")
 	}
-	return id, csrf, nil
-}
-
-// makeRoomLocked drops expired sessions, then the oldest one while the bound is reached.
-func (s *Service) makeRoomLocked(now time.Time) {
-	for id, st := range s.sessions {
-		if s.expired(st, now) {
-			delete(s.sessions, id)
-		}
-	}
-	for len(s.sessions) >= s.opts.MaxSessions {
-		var oldestID string
-		var oldest *session
-		for id, st := range s.sessions {
-			if oldest == nil || st.created.Before(oldest.created) {
-				oldestID, oldest = id, st
-			}
-		}
-		delete(s.sessions, oldestID)
-	}
+	return token, nil
 }

@@ -21,6 +21,7 @@ type sessionView struct {
 	ExpiresAt         string `json:"expiresAt"`
 	IdleExpiresAt     string `json:"idleExpiresAt"`
 	AbsoluteExpiresAt string `json:"absoluteExpiresAt"`
+	RememberMe        bool   `json:"rememberMe"`
 	CSRFToken         string `json:"csrfToken"`
 }
 
@@ -43,7 +44,7 @@ func accountOf(p operator.Profile, s *operator.Session) accountView {
 	if s != nil {
 		view.Session = &sessionView{
 			ExpiresAt: timestamp(s.ExpiresAt), IdleExpiresAt: timestamp(s.IdleExpiresAt),
-			AbsoluteExpiresAt: timestamp(s.AbsoluteExpiresAt), CSRFToken: s.CSRFToken,
+			AbsoluteExpiresAt: timestamp(s.AbsoluteExpiresAt), RememberMe: s.RememberMe, CSRFToken: s.CSRFToken,
 		}
 	}
 	return view
@@ -102,6 +103,11 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 		a.problem(w, r, http.StatusForbidden, "CurrentPasswordIncorrect", "current password is incorrect")
 	case errors.Is(err, operator.ErrAuthUnavailable):
 		a.problem(w, r, http.StatusServiceUnavailable, "AuthUnavailable", "authentication is unavailable until the account is recovered")
+	// Session errors wrap the storage errors, so they are matched first.
+	case errors.Is(err, operator.ErrSessionUpdateOutcomeUnknown):
+		a.problem(w, r, http.StatusServiceUnavailable, "SessionUpdateOutcomeUnknown", "session change outcome is unknown; authentication stops until recovery")
+	case errors.Is(err, operator.ErrSessionStorageUnavailable):
+		a.problem(w, r, http.StatusServiceUnavailable, "SessionStorageUnavailable", "session storage failed; the session was not changed")
 	case errors.Is(err, operator.ErrUpdateOutcomeUnknown):
 		a.problem(w, r, http.StatusServiceUnavailable, "AccountUpdateOutcomeUnknown", "account change outcome is unknown; authentication stops until recovery")
 	case errors.Is(err, operator.ErrStorageUnavailable):

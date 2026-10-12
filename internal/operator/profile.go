@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"unicode/utf8"
 )
 
@@ -26,7 +27,7 @@ func (s *Service) UpdateDisplayName(id, raw string) (Profile, error) {
 	}
 	next := s.account
 	next.DisplayName = name
-	if err := s.commitLocked(next); err != nil {
+	if err := s.commitLocked(next, maps.Clone(s.sessions), accountChange); err != nil {
 		return Profile{}, err
 	}
 	return s.account.Profile(), nil
@@ -59,16 +60,14 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 		return err
 	}
 	if !utf8.ValidString(current) || utf8.RuneCountInString(current) > maxPassword {
-		s.recordWrongCurrent(id)
-		return ErrCurrentPasswordIncorrect
+		return s.recordWrongCurrent(id)
 	}
 	ok, err := s.verify(ctx, current, snapshot.PasswordHash)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		s.recordWrongCurrent(id)
-		return ErrCurrentPasswordIncorrect
+		return s.recordWrongCurrent(id)
 	}
 	hash, err := s.hash(ctx, next)
 	if err != nil {
@@ -86,23 +85,29 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	updated := s.account
 	updated.PasswordHash = hash
 	updated.CredentialVersion++
-	if err := s.commitLocked(updated); err != nil {
-		return err
-	}
-	clear(s.sessions)
-	return nil
+	return s.commitLocked(updated, map[string]*session{}, accountChange)
 }
 
-// recordWrongCurrent counts a wrong current password and revokes the session at FailureLimit.
-func (s *Service) recordWrongCurrent(id string) {
+// recordWrongCurrent counts a wrong current password and returns ErrCurrentPasswordIncorrect. At
+// FailureLimit the session is revoked, and the revocation is stored before the caller is told.
+func (s *Service) recordWrongCurrent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if st, ok := s.sessions[id]; ok {
-		st.wrongCurrent++
-		if st.wrongCurrent >= s.opts.FailureLimit {
-			delete(s.sessions, id)
-		}
+	digest := sessionDigest(id)
+	st, ok := s.sessions[digest]
+	if !ok {
+		return ErrCurrentPasswordIncorrect
 	}
+	st.wrongCurrent++
+	if st.wrongCurrent < s.opts.FailureLimit {
+		return ErrCurrentPasswordIncorrect
+	}
+	next := maps.Clone(s.sessions)
+	delete(next, digest)
+	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
+		return err
+	}
+	return ErrCurrentPasswordIncorrect
 }
 
 // hash creates the verifier for a new password inside a verification slot.
@@ -113,24 +118,4 @@ func (s *Service) hash(ctx context.Context, password string) (string, error) {
 	}
 	defer release()
 	return s.opts.Hasher.Hash(password)
-}
-
-// commitLocked persists next while s.mu is held. A definite storage failure leaves everything unchanged;
-// any other failure enters fail-closed recovery until a restart reloads the authoritative file.
-func (s *Service) commitLocked(next Account) error {
-	err := s.opts.Store.Replace(State{Account: next})
-	switch {
-	case err == nil:
-		s.account = next
-		return nil
-	case errors.Is(err, ErrStorageUnavailable) && !errors.Is(err, ErrUpdateOutcomeUnknown):
-		return err
-	default:
-		s.recovering = true
-		clear(s.sessions)
-		if errors.Is(err, ErrUpdateOutcomeUnknown) {
-			return err
-		}
-		return fmt.Errorf("%w: %w", ErrUpdateOutcomeUnknown, err)
-	}
 }
