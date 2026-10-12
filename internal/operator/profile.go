@@ -91,7 +91,12 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	updated := s.account
 	updated.PasswordHash = hash
 	updated.CredentialVersion++
-	return s.commitLocked(updated, map[string]*session{}, accountChange)
+	if err := s.commitLocked(updated, map[string]*session{}, accountChange); err != nil {
+		return err
+	}
+	// The earlier wrong passwords were made against a password that no longer exists.
+	s.changeThrottle.failures = s.changeThrottle.failures[:0]
+	return nil
 }
 
 // recordWrongCurrent counts a wrong current password for the whole operator and returns

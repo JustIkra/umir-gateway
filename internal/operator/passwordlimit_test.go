@@ -179,3 +179,17 @@ func TestLimitIgnoresASessionThatExpiredDuringVerification(t *testing.T) {
 		t.Fatalf("fifth wrong password after the session expired = %v", err)
 	}
 }
+
+func TestSuccessfulChangeClearsTheWrongPasswordCount(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.failPasswordChanges(t, session.ID, DefaultFailureLimit-1)
+	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); err != nil {
+		t.Fatal(err)
+	}
+	_, next, err := f.svc.Login(t.Context(), "operator", newPassword, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.failPasswordChanges(t, next.ID, 1)
+}
