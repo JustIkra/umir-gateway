@@ -371,9 +371,10 @@ func TestSessionStorageFailures(t *testing.T) {
 	if len(w.Header().Values("Set-Cookie")) != 0 {
 		t.Errorf("cookie changed by a failed logout: %v", w.Header().Values("Set-Cookie"))
 	}
-	// /me renews the ordinary idle deadline, which must be stored first.
-	wantProblem(t, f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}),
-		http.StatusServiceUnavailable, "SessionStorageUnavailable")
+	// /me cannot store a renewed deadline, so it reports the stored one.
+	if me := f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}); me.Code != http.StatusOK {
+		t.Errorf("me while the store fails: %d %s", me.Code, me.Body)
+	}
 	f.store.fail(errors.New("rename outcome unknown"))
 	wantProblem(t, f.do(logout), http.StatusServiceUnavailable, "SessionUpdateOutcomeUnknown")
 	wantProblem(t, f.do(call{method: http.MethodGet, path: "/api/operator/me", cookies: []*http.Cookie{session}}),

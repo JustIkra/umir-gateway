@@ -26,6 +26,8 @@ type session struct {
 	credentialVersion int64
 	created           time.Time
 	lastSeen          time.Time
+	// storedLastSeen is the activity time the store holds for this session.
+	storedLastSeen time.Time
 	// expires is the absolute deadline fixed at login.
 	expires time.Time
 }
@@ -79,12 +81,21 @@ func (s *Service) activeLocked(token string, now time.Time) (*session, error) {
 }
 
 // restore keeps the stored sessions that are still valid for the account, the newest ones up to the bound.
+// A stored deadline never outlives the lifetime configured now for the session's mode.
 func (s *Service) restore(stored []StoredSession) {
 	now := s.opts.Now()
 	for _, r := range stored {
+		lifetime := s.opts.AbsoluteTimeout
+		if r.RememberMe {
+			lifetime = s.opts.RememberTimeout
+		}
+		expires := r.ExpiresAt
+		if limit := r.Created.Add(lifetime); limit.Before(expires) {
+			expires = limit
+		}
 		st := &session{
 			rememberMe: r.RememberMe, credentialVersion: r.CredentialVersion,
-			created: r.Created, lastSeen: r.LastSeen, expires: r.ExpiresAt,
+			created: r.Created, lastSeen: r.LastSeen, storedLastSeen: r.LastSeen, expires: expires,
 		}
 		if !s.expired(st, now) && st.credentialVersion == s.account.CredentialVersion {
 			s.sessions[r.Digest] = st
@@ -113,7 +124,7 @@ func stateOf(account Account, sessions map[string]*session) State {
 	for digest, st := range sessions {
 		stored = append(stored, StoredSession{
 			Digest: digest, RememberMe: st.rememberMe, CredentialVersion: st.credentialVersion,
-			Created: st.created, LastSeen: st.lastSeen, ExpiresAt: st.expires,
+			Created: st.created, LastSeen: storedLastSeen(st), ExpiresAt: st.expires,
 		})
 	}
 	slices.SortFunc(stored, func(a, b StoredSession) int {
@@ -123,6 +134,15 @@ func stateOf(account Account, sessions map[string]*session) State {
 		return strings.Compare(a.Digest, b.Digest)
 	})
 	return State{Account: account, Sessions: stored}
+}
+
+// storedLastSeen is the activity time to store. The file holds wall-clock times only, so after the wall
+// clock stepped back, activity measured on the monotonic clock is stored as the creation time.
+func storedLastSeen(st *session) time.Time {
+	if st.lastSeen.Round(0).Before(st.created.Round(0)) {
+		return st.created
+	}
+	return st.lastSeen
 }
 
 // change tells commitLocked which errors describe a failed commit.
@@ -135,8 +155,9 @@ const (
 
 // commitLocked stores account and sessions while s.mu is held and publishes them only after the store
 // confirms; sessions is a copy the caller prepared, and expired or outdated records are dropped from it.
-// A definite storage failure changes nothing. Any other failure enters fail-closed recovery until a
-// restart reloads the authoritative file.
+// A state the loader would reject is never written, so a restart can always load the file. A definite
+// storage failure changes nothing. Any other failure enters fail-closed recovery until a restart reloads
+// the authoritative file.
 func (s *Service) commitLocked(account Account, sessions map[string]*session, kind change) error {
 	now := s.opts.Now()
 	for digest, st := range sessions {
@@ -144,9 +165,18 @@ func (s *Service) commitLocked(account Account, sessions map[string]*session, ki
 			delete(sessions, digest)
 		}
 	}
-	err := s.opts.Store.Replace(stateOf(account, sessions))
+	state := stateOf(account, sessions)
+	err := ValidateState(state)
+	if err != nil {
+		err = fmt.Errorf("%w: refusing to store an invalid state: %w", ErrStorageUnavailable, err)
+	} else {
+		err = s.opts.Store.Replace(state)
+	}
 	switch {
 	case err == nil:
+		for _, st := range sessions {
+			st.storedLastSeen = storedLastSeen(st)
+		}
 		s.account, s.sessions = account, sessions
 		return nil
 	case errors.Is(err, ErrStorageUnavailable) && !errors.Is(err, ErrUpdateOutcomeUnknown):

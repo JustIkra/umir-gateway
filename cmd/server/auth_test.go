@@ -9,8 +9,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/JustIkra/umir-gateway/internal/adapters/accountfile"
 	"github.com/JustIkra/umir-gateway/internal/config"
+	"github.com/JustIkra/umir-gateway/internal/operator"
 )
 
 func TestBusinessRoutesRequireSession(t *testing.T) {
@@ -121,4 +124,25 @@ func TestClearSessionsEmptiesTheStoredSessions(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("cleared session: %d %s", response.Code, response.Body)
 	}
+}
+
+func TestClearSessionsRepairsInvalidSessionRecords(t *testing.T) {
+	values := operatorEnv(t)
+	signIn(t, gatewayWith(t, values))
+	cfg := loadConfig(t, values).Operator
+	state, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{}, accountfile.Options{
+		NewProfileID: newToken, Validate: operator.ValidateState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Sessions[0].LastSeen = state.Sessions[0].Created.Add(-time.Second)
+	if err := store.Replace(state); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := clearSessions(cfg, &out); err != nil || out.String() != "cleared sessions: 1\n" {
+		t.Fatalf("clearSessions = %q, %v", out.String(), err)
+	}
+	gatewayWith(t, values)
 }

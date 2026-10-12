@@ -102,10 +102,31 @@ func TestCurrentStoresTheOrdinaryIdleDeadlineBeforeReportingIt(t *testing.T) {
 	if stored := f.store.last().Sessions; len(stored) != 1 || !stored[0].LastSeen.Equal(f.clock.Now()) {
 		t.Errorf("stored sessions = %+v, want the reported activity", stored)
 	}
+}
+
+func TestCurrentReportsTheStoredDeadlineWhileStorageFails(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.clock.Advance(5 * time.Minute)
+	if _, _, err := f.svc.Current(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored := f.clock.Now().Add(DefaultIdleTimeout)
+	f.clock.Advance(5 * time.Minute)
+	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
+		t.Fatal(err)
+	}
 	f.store.setErr(errDiskFull)
 	f.clock.Advance(time.Minute)
-	if _, _, err := f.svc.Current(session.ID); !errors.Is(err, ErrSessionStorageUnavailable) {
-		t.Errorf("Current with a failing store = %v", err)
+	_, got, err := f.svc.Current(session.ID)
+	if err != nil || !got.IdleExpiresAt.Equal(stored) || !got.ExpiresAt.Equal(stored) {
+		t.Fatalf("Current with a failing store = %+v, %v; want the stored deadline %v", got, err, stored)
+	}
+	// Once the store works again, the renewed deadline is stored and reported.
+	f.store.setErr(nil)
+	f.clock.Advance(time.Minute)
+	if _, got, err = f.svc.Current(session.ID); err != nil || !got.IdleExpiresAt.Equal(f.clock.Now().Add(DefaultIdleTimeout)) {
+		t.Fatalf("Current after the store recovered = %+v, %v", got, err)
 	}
 }
 
@@ -231,5 +252,78 @@ func TestPasswordChangeStoresNoSessions(t *testing.T) {
 	}
 	if last := f.store.last(); len(last.Sessions) != 0 || last.Account.CredentialVersion != 2 {
 		t.Errorf("stored state = %+v", last)
+	}
+}
+
+func TestBackwardClockStepKeepsTheStoredStateLoadable(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	writes := len(f.store.states())
+	f.clock.Advance(-2 * time.Second)
+	if _, _, err := f.svc.Current(session.ID); err != nil {
+		t.Fatalf("Current after the clock stepped back = %v", err)
+	}
+	if len(f.store.states()) == writes {
+		t.Fatal("Current stored nothing")
+	}
+	if err := ValidateState(f.store.last()); err != nil {
+		t.Fatalf("stored state: %v", err)
+	}
+	f.restart(t)
+}
+
+func TestCommitNeverStoresAStateTheLoaderRejects(t *testing.T) {
+	f := newFixture(t, nil)
+	broken, other := f.login(t), f.login(t)
+	f.svc.mu.Lock()
+	f.svc.sessions[digestOf(broken.ID)].created = time.Time{}
+	f.svc.mu.Unlock()
+	writes := len(f.store.states())
+	if err := f.svc.Logout(other.ID); !errors.Is(err, ErrSessionStorageUnavailable) {
+		t.Fatalf("Logout = %v", err)
+	}
+	if len(f.store.states()) != writes {
+		t.Error("an invalid state was stored")
+	}
+	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
+		t.Errorf("session after the refused commit: %v", err)
+	}
+}
+
+func TestLogoutOfAnExpiredSessionStoresNothing(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.clock.Advance(DefaultIdleTimeout)
+	f.store.setErr(fmt.Errorf("%w: lost reply", ErrUpdateOutcomeUnknown))
+	if err := f.svc.Logout(session.ID); err != nil {
+		t.Fatalf("Logout of an expired session = %v", err)
+	}
+	f.store.setErr(nil)
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
+		t.Errorf("login after the logout: %v", err)
+	}
+}
+
+func TestRestoreCapsStoredDeadlinesByTheConfiguredLifetimes(t *testing.T) {
+	f := newFixture(t, nil)
+	now := f.clock.Now()
+	created := now.Add(-2 * time.Hour)
+	record := func(token string, remembered bool) StoredSession {
+		return StoredSession{
+			Digest: digestOf(token), RememberMe: remembered, CredentialVersion: 1,
+			Created: created, LastSeen: now.Add(-time.Minute), ExpiresAt: now.Add(365 * 24 * time.Hour),
+		}
+	}
+	opts := f.opts
+	opts.AbsoluteTimeout, opts.RememberTimeout = time.Hour, 3*time.Hour
+	svc, err := NewService(State{Account: testAccount(), Sessions: []StoredSession{record("ordinary", false), record("remembered", true)}}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Authenticate("ordinary"); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("ordinary session past the configured absolute timeout: %v", err)
+	}
+	if _, got, err := svc.Authenticate("remembered"); err != nil || !got.AbsoluteExpiresAt.Equal(created.Add(3*time.Hour)) {
+		t.Errorf("remembered session = %+v, %v; want the configured lifetime", got, err)
 	}
 }
