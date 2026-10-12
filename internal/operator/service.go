@@ -288,9 +288,9 @@ func (s *Service) verify(ctx context.Context, password, encoded string) (bool, e
 	return ok, nil
 }
 
-// Logout revokes id and stores the revocation before it reports success. An absent or already invalid
-// session needs nothing stored. During recovery the stored state is not authoritative, so only a
-// request without a session can succeed.
+// Logout revokes id and stores the revocation before it reports success. An absent, expired or
+// outdated session is never restored, so it needs nothing stored. During recovery the stored state is
+// not authoritative, so only a request without a session can succeed.
 func (s *Service) Logout(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -300,12 +300,11 @@ func (s *Service) Logout(id string) error {
 		}
 		return ErrAuthUnavailable
 	}
-	digest := sessionDigest(id)
-	if _, ok := s.sessions[digest]; !ok || id == "" {
+	if _, err := s.activeLocked(id, s.opts.Now()); err != nil {
 		return nil
 	}
 	next := maps.Clone(s.sessions)
-	delete(next, digest)
+	delete(next, sessionDigest(id))
 	return s.commitLocked(s.account, next, sessionChange)
 }
 

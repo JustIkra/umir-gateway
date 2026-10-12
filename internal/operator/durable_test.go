@@ -268,3 +268,17 @@ func TestCommitNeverStoresAStateTheLoaderRejects(t *testing.T) {
 		t.Errorf("session after the refused commit: %v", err)
 	}
 }
+
+func TestLogoutOfAnExpiredSessionStoresNothing(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.clock.Advance(DefaultIdleTimeout)
+	f.store.setErr(fmt.Errorf("%w: lost reply", ErrUpdateOutcomeUnknown))
+	if err := f.svc.Logout(session.ID); err != nil {
+		t.Fatalf("Logout of an expired session = %v", err)
+	}
+	f.store.setErr(nil)
+	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
+		t.Errorf("login after the logout: %v", err)
+	}
+}
