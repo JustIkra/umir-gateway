@@ -93,14 +93,70 @@ func TestPasswordChangeLimitCountsOnlyCredentialChecks(t *testing.T) {
 	f.failPasswordChanges(t, session.ID, DefaultFailureLimit-1)
 }
 
-func TestOverlongCurrentPasswordCountsTowardsTheLimit(t *testing.T) {
+func TestOverlongCurrentPasswordDoesNotConsumeFailureLimit(t *testing.T) {
 	f := newFixture(t, nil)
-	session := f.login(t)
-	f.failPasswordChanges(t, session.ID, DefaultFailureLimit-1)
+	caller, other := f.login(t), f.login(t)
+	verified := len(f.hasher.verifiedHashes())
+	hashed := len(f.hasher.hashedPasswords())
+	writes := len(f.store.states())
+	tooLong := strings.Repeat("я", 33)
+	wantFieldError(t, f.svc.ChangePassword(t.Context(), caller.ID, "bad\xff", newPassword), "currentPassword", CodeInvalidCharacters)
+	for range 3 {
+		wantFieldError(t, f.svc.ChangePassword(t.Context(), caller.ID, tooLong, newPassword), "currentPassword", CodeTooLong)
+	}
+	if got := len(f.hasher.verifiedHashes()); got != verified {
+		t.Errorf("overlong password verifications = %d, want %d", got-verified, 0)
+	}
+	if got := len(f.hasher.hashedPasswords()); got != hashed {
+		t.Errorf("overlong password hashes = %d, want 0", got-hashed)
+	}
+	if got := len(f.store.states()); got != writes {
+		t.Errorf("overlong password storage writes = %d, want 0", got-writes)
+	}
+	for name, session := range map[string]Session{"caller": caller, "other": other} {
+		if _, _, err := f.svc.Authenticate(session.ID); err != nil {
+			t.Errorf("%s session after overlong input: %v", name, err)
+		}
+	}
+	for range DefaultFailureLimit - 1 {
+		wantFieldError(t, f.svc.ChangePassword(t.Context(), caller.ID, tooLong, newPassword), "currentPassword", CodeTooLong)
+		if err := f.svc.ChangePassword(t.Context(), caller.ID, wrongCurrent, newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+			t.Fatalf("wrong current password before limit = %v", err)
+		}
+	}
+	wantFieldError(t, f.svc.ChangePassword(t.Context(), caller.ID, tooLong, newPassword), "currentPassword", CodeTooLong)
 	var limited *PasswordChangeLimitError
-	err := f.svc.ChangePassword(t.Context(), session.ID, strings.Repeat("x", maxPassword+1), newPassword)
+	err := f.svc.ChangePassword(t.Context(), caller.ID, wrongCurrent, newPassword)
 	if !errors.As(err, &limited) || !limited.SessionRevoked {
-		t.Fatalf("fifth wrong password, overlong = %v", err)
+		t.Fatalf("fifth credential verification after interspersed overlong inputs = %v", err)
+	}
+	if got := len(f.hasher.verifiedHashes()) - verified; got != DefaultFailureLimit {
+		t.Errorf("credential verifications = %d, want %d", got, DefaultFailureLimit)
+	}
+	if got := len(f.store.states()); got != writes+1 {
+		t.Errorf("storage writes = %d, want one session revocation", got-writes)
+	}
+	if _, _, err := f.svc.Authenticate(caller.ID); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("fifth actual failure did not revoke caller: %v", err)
+	}
+	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
+		t.Errorf("fifth actual failure revoked other session: %v", err)
+	}
+}
+
+func TestCurrentPasswordAtMaximumLengthCanBeVerified(t *testing.T) {
+	f := newFixture(t, nil)
+	first := f.login(t)
+	boundary := strings.Repeat("я", 32)
+	if err := f.svc.ChangePassword(t.Context(), first.ID, testPassword, boundary); err != nil {
+		t.Fatalf("set 32-code-point password: %v", err)
+	}
+	_, session, err := f.svc.Login(t.Context(), "operator", boundary, "", false)
+	if err != nil {
+		t.Fatalf("login with 32-code-point password: %v", err)
+	}
+	if err := f.svc.ChangePassword(t.Context(), session.ID, boundary, newPassword); err != nil {
+		t.Fatalf("verify 32-code-point current password: %v", err)
 	}
 }
 

@@ -88,8 +88,7 @@ type Service struct {
 	mu         sync.Mutex
 	account    Account
 	recovering bool
-	// sessions are keyed by token digest and mirror the last committed state, except that ordinary idle
-	// activity of business requests is stored with the next commit.
+	// sessions are keyed by token digest and mirror the last committed state.
 	sessions  map[string]*session
 	anonymous map[string]*anonymousContext
 	// throttle limits failed logins; changeThrottle limits wrong current passwords in password changes.

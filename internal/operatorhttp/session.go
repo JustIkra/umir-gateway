@@ -41,7 +41,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		// RememberMe keeps the session cookie across browser restarts until the absolute deadline.
 		RememberMe bool `json:"rememberMe"`
 	}
-	if !a.decode(w, r, &body) {
+	if !a.decode(w, r, &body, "login", "password", "rememberMe") {
 		return
 	}
 	if body.Login == nil || body.Password == nil {

@@ -140,6 +140,13 @@ func TestChangePasswordRejections(t *testing.T) {
 		}
 	}
 	wantProblem(t, f.patch("/api/operator/me/password", `{"currentPassword":"x"}`, session, token), http.StatusBadRequest, "InvalidRequest")
+	tooLong := f.patch("/api/operator/me/password", f.json(map[string]string{
+		"currentPassword": strings.Repeat("я", 33), "newPassword": newPassword,
+	}), session, token)
+	p := wantProblem(t, tooLong, http.StatusUnprocessableEntity, "PasswordRejected")
+	if p.FieldErrors["currentPassword"] != "TooLong" {
+		t.Errorf("overlong current password field error = %v, want TooLong", p.FieldErrors["currentPassword"])
+	}
 	wantProblem(t, f.patch("/api/operator/me/password", f.json(map[string]string{"currentPassword": testPassword, "newPassword": newPassword}), session, ""),
 		http.StatusForbidden, "InvalidCsrfToken")
 	// None of the rejections changed the password or ended the session.

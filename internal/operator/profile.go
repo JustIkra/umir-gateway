@@ -65,8 +65,11 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	if err := CheckPassword(next); err != nil {
 		return err
 	}
-	if !utf8.ValidString(current) || utf8.RuneCountInString(current) > maxPassword {
-		return s.recordWrongCurrent(id)
+	if !utf8.ValidString(current) {
+		return &FieldError{Field: "currentPassword", Code: CodeInvalidCharacters}
+	}
+	if utf8.RuneCountInString(current) > maxPassword {
+		return &FieldError{Field: "currentPassword", Code: CodeTooLong}
 	}
 	ok, err := s.verify(ctx, current, snapshot.PasswordHash)
 	if err != nil {

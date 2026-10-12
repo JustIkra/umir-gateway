@@ -76,7 +76,7 @@ const challenge = `Session realm="umir-operator"`
 // fieldMessages are the developer messages of the 422 codes.
 var fieldMessages = map[string]string{
 	"InvalidDisplayName": "display name must contain 2 to 80 characters without control characters",
-	"PasswordRejected":   "new password must contain 8 to 32 characters",
+	"PasswordRejected":   "password field is invalid",
 }
 
 // fail answers an error of the account module. invalid is the 422 code of a field error on this route.

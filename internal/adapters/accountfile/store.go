@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -209,33 +208,10 @@ func decode(data []byte) (operator.State, int, error) {
 	return state, version, nil
 }
 
-// objectFields reads exactly one JSON object and returns its members. Duplicate keys and data after the
-// object are rejected.
+// objectFields reads exactly one JSON object with unique keys and returns its members.
 func objectFields(data []byte) (map[string]json.RawMessage, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return nil, errInvalidFile
-	}
-	fields := make(map[string]json.RawMessage)
-	for decoder.More() {
-		token, err := decoder.Token()
-		key, isKey := token.(string)
-		if err != nil || !isKey {
-			return nil, errInvalidFile
-		}
-		if _, duplicate := fields[key]; duplicate {
-			return nil, errInvalidFile
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil, errInvalidFile
-		}
-		fields[key] = value
-	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
-		return nil, errInvalidFile
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+	fields, err := strictjson.Object(data)
+	if err != nil {
 		return nil, errInvalidFile
 	}
 	return fields, nil

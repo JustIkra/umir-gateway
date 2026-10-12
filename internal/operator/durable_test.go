@@ -189,8 +189,9 @@ func TestRestoreDropsStaleRecords(t *testing.T) {
 func TestSessionLimitCoversBothModesAndIsStored(t *testing.T) {
 	f := newFixture(t, nil)
 	var first Session
+	// The oldest session, the one evicted, is a remembered one: its 30-day cookie must not outlive it.
 	for i := range DefaultMaxSessions + 1 {
-		_, s, err := f.svc.Login(t.Context(), "operator", testPassword, "", i%2 == 1)
+		_, s, err := f.svc.Login(t.Context(), "operator", testPassword, "", i%2 == 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,8 +200,8 @@ func TestSessionLimitCoversBothModesAndIsStored(t *testing.T) {
 		}
 		f.clock.Advance(time.Second)
 	}
-	if got := len(f.store.last().Sessions); got != DefaultMaxSessions {
-		t.Errorf("stored sessions = %d, want %d", got, DefaultMaxSessions)
+	if got := len(f.store.last().Sessions); got != DefaultMaxSessions || !first.RememberMe {
+		t.Errorf("stored sessions = %d, want %d; first remembered %v", got, DefaultMaxSessions, first.RememberMe)
 	}
 	if _, _, err := f.restart(t).Authenticate(first.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("the evicted session came back after a restart: %v", err)
@@ -247,7 +248,8 @@ func TestLogoutDuringRecovery(t *testing.T) {
 func TestPasswordChangeStoresNoSessions(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
-	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", true); err != nil {
+	_, remembered, err := f.svc.Login(t.Context(), "operator", testPassword, "", true)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); err != nil {
@@ -255,6 +257,12 @@ func TestPasswordChangeStoresNoSessions(t *testing.T) {
 	}
 	if last := f.store.last(); len(last.Sessions) != 0 || last.Account.CredentialVersion != 2 {
 		t.Errorf("stored state = %+v", last)
+	}
+	restarted := f.restart(t)
+	for name, id := range map[string]string{"ordinary": session.ID, "remembered": remembered.ID} {
+		if _, _, err := restarted.Authenticate(id); !errors.Is(err, ErrUnauthenticated) {
+			t.Errorf("%s session after a password change and a restart: %v", name, err)
+		}
 	}
 }
 

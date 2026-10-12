@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/textproto"
 	"os"
 	"slices"
 	"strings"
@@ -78,6 +80,48 @@ func TestUpstreamNeverSeesOperatorCredentials(t *testing.T) {
 	app.ServeHTTP(response, request)
 	if got := response.Header().Values("Set-Cookie"); response.Code != http.StatusAccepted || !slices.Equal(got, []string{"theme=light; Path=/"}) {
 		t.Fatalf("response: %d %q", response.Code, got)
+	}
+}
+
+// TestUpstreamInformationalResponsesCannotSetOperatorCookies covers 1xx answers such as 103 Early Hints,
+// which the reverse proxy forwards without ModifyResponse.
+func TestUpstreamInformationalResponsesCannotSetOperatorCookies(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Set-Cookie", "umir_operator_session=forged; Path=/")
+		w.Header().Add("Set-Cookie", "__Host-umir_operator_preauth=forged; Path=/; Secure")
+		w.Header().Add("Set-Cookie", "theme=light; Path=/")
+		w.Header().Add("Link", "</app.css>; rel=preload; as=style")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Del("Set-Cookie")
+		w.Header().Del("Link")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	server := httptest.NewServer(gateway(t, upstream.URL, unusedUpstream(t), ""))
+	defer server.Close()
+	var hints []http.Header
+	trace := &httptrace.ClientTrace{Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+		if code == http.StatusEarlyHints {
+			hints = append(hints, http.Header(header).Clone())
+		}
+		return nil
+	}}
+	request, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), http.MethodGet, server.URL+"/api/serving/menu", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || len(hints) != 1 {
+		t.Fatalf("status %d with %d early hints, want 200 after one", response.StatusCode, len(hints))
+	}
+	if got := hints[0].Values("Set-Cookie"); !slices.Equal(got, []string{"theme=light; Path=/"}) || hints[0].Get("Link") == "" {
+		t.Errorf("early hints = %q, want only the unrelated cookie and the Link header", hints[0])
 	}
 }
 

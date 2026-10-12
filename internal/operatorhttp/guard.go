@@ -43,7 +43,9 @@ func (a *API) Protect(next http.Handler) http.Handler {
 }
 
 // StripCredentials removes the operator cookies and the CSRF header before a request leaves the
-// gateway. Other cookies keep their original text; the caller's request is not modified.
+// gateway. Other cookies keep their original text; the caller's request is not modified. Informational
+// answers written through it, which a reverse proxy forwards without ModifyResponse, lose the Set-Cookie
+// lines of the operator cookies.
 func StripCredentials(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Clone()
@@ -64,9 +66,30 @@ func StripCredentials(next http.Handler) http.Handler {
 		}
 		out := r.WithContext(r.Context())
 		out.Header = header
-		next.ServeHTTP(w, out)
+		next.ServeHTTP(informational{w}, out)
 	})
 }
+
+// informational drops reserved Set-Cookie lines from 1xx answers; the final answer is left to
+// DropReservedCookies.
+type informational struct{ http.ResponseWriter }
+
+func (w informational) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		header := w.Header()
+		lines := header.Values("Set-Cookie")
+		header.Del("Set-Cookie")
+		for _, line := range lines {
+			if !reservedSetCookie(line) {
+				header.Add("Set-Cookie", line)
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the flushing and deadline methods of the wrapped writer.
+func (w informational) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // DropReservedCookies removes upstream Set-Cookie lines that would replace an operator cookie. A
 // nameless cookie goes too: browsers send it back as its bare value, which can read as a reserved
@@ -75,10 +98,17 @@ func DropReservedCookies(response *http.Response) error {
 	lines := response.Header.Values("Set-Cookie")
 	response.Header.Del("Set-Cookie")
 	for _, line := range lines {
-		name, _, _ := strings.Cut(line, "=")
-		if name := strings.ToLower(strings.TrimSpace(name)); name != "" && !reserved[name] {
+		if !reservedSetCookie(line) {
 			response.Header.Add("Set-Cookie", line)
 		}
 	}
 	return nil
+}
+
+// reservedSetCookie reports a Set-Cookie line that would replace an operator cookie, or a nameless one,
+// which browsers send back as its bare value and can read as a reserved name=value pair.
+func reservedSetCookie(line string) bool {
+	name, _, _ := strings.Cut(line, "=")
+	name = strings.ToLower(strings.TrimSpace(name))
+	return name == "" || reserved[name]
 }

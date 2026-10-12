@@ -53,17 +53,22 @@ func (t *tokens) failCall(n int) {
 // fakeHash encodes the exact password bytes as ASCII, as a real PHC string would be.
 func fakeHash(password string) string { return "hash:" + hex.EncodeToString([]byte(password)) }
 
-// fakeHasher stores fakeHash(password) and records verified hashes; onVerify can block a verification.
+// fakeHasher records hash and verification inputs; onVerify can block a verification.
 type fakeHasher struct {
 	mu       sync.Mutex
+	hashed   []string
 	verified []string
 	onVerify func()
 	hashErr  error
 }
 
 func (h *fakeHasher) Hash(password string) (string, error) {
-	if h.hashErr != nil {
-		return "", h.hashErr
+	h.mu.Lock()
+	h.hashed = append(h.hashed, password)
+	err := h.hashErr
+	h.mu.Unlock()
+	if err != nil {
+		return "", err
 	}
 	return fakeHash(password), nil
 }
@@ -92,6 +97,12 @@ func (h *fakeHasher) verifiedHashes() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.verified...)
+}
+
+func (h *fakeHasher) hashedPasswords() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.hashed...)
 }
 
 type fakeStore struct {
