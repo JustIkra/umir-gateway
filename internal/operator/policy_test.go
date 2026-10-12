@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-func fieldOf(t *testing.T, err error) string {
+func wantFieldError(t *testing.T, err error, field string, code FieldCode) {
 	t.Helper()
-	var field *FieldError
-	if !errors.As(err, &field) {
-		t.Fatalf("error %v is not a FieldError", err)
+	var got *FieldError
+	if !errors.As(err, &got) || got.Field != field || got.Code != code {
+		t.Errorf("error = %v, want %s %s", err, field, code)
 	}
-	return field.Field
 }
 
 func TestCanonicalDisplayName(t *testing.T) {
@@ -27,10 +26,20 @@ func TestCanonicalDisplayName(t *testing.T) {
 			t.Errorf("CanonicalDisplayName(%q) = %q, %v; want %q", tc.raw, got, err, tc.want)
 		}
 	}
-	for _, raw := range []string{"", " Я ", "\u3000", strings.Repeat("я", 81), "a\x00b", "bad\xffname", "Опе\uFFFDратор"} {
-		if _, err := CanonicalDisplayName(raw); err == nil || fieldOf(t, err) != "displayName" {
-			t.Errorf("CanonicalDisplayName(%q) error = %v", raw, err)
-		}
+	for _, tc := range []struct {
+		raw  string
+		code FieldCode
+	}{
+		{"", CodeRequired},
+		{"\u3000\t", CodeRequired}, // only whitespace
+		{" Я ", CodeTooShort},
+		{strings.Repeat("я", 81), CodeTooLong},
+		{"a\x00b", CodeInvalidCharacters},
+		{"bad\xffname", CodeInvalidCharacters},
+		{"Опе\uFFFDратор", CodeInvalidCharacters},
+	} {
+		_, err := CanonicalDisplayName(tc.raw)
+		wantFieldError(t, err, "displayName", tc.code)
 	}
 }
 
@@ -59,18 +68,20 @@ func TestCheckPassword(t *testing.T) {
 			t.Errorf("CheckPassword(%q) = %v", password, err)
 		}
 	}
-	for _, password := range []string{
-		"1234567",
-		"\u00e9\u00e9\u00e9\u00e9", // 4 precomposed code points
-		strings.Repeat("🙂", 33),
-		"bad utf8\xff",
-		"password\uFFFD", // what encoding/json makes of invalid UTF-8 or a lone surrogate
+	for _, tc := range []struct {
+		password string
+		code     FieldCode
+	}{
+		{"", CodeRequired},
+		{"1234567", CodeTooShort},
+		{"\u00e9\u00e9\u00e9\u00e9", CodeTooShort}, // 4 precomposed code points
+		{strings.Repeat("🙂", 33), CodeTooLong},
+		{"bad utf8\xff", CodeInvalidCharacters},
+		{"password\uFFFD", CodeInvalidCharacters}, // what encoding/json makes of invalid UTF-8 or a lone surrogate
 	} {
-		err := CheckPassword(password)
-		if err == nil || fieldOf(t, err) != "newPassword" {
-			t.Errorf("CheckPassword(%q) error = %v", password, err)
-		}
-		if err != nil && strings.Contains(err.Error(), password) {
+		err := CheckPassword(tc.password)
+		wantFieldError(t, err, "newPassword", tc.code)
+		if err != nil && tc.password != "" && strings.Contains(err.Error(), tc.password) {
 			t.Errorf("error echoes the password: %v", err)
 		}
 	}

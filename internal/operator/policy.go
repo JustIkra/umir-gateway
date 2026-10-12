@@ -17,13 +17,24 @@ const (
 	maxLogin       = 128
 )
 
-// FieldError rejects one request field with a message that is safe to show; it never contains the value.
+// FieldCode is a stable, machine-readable reason; the client maps it to text in its own language.
+type FieldCode string
+
+const (
+	CodeRequired          FieldCode = "Required"
+	CodeTooShort          FieldCode = "TooShort"
+	CodeTooLong           FieldCode = "TooLong"
+	CodeInvalidFormat     FieldCode = "InvalidFormat"
+	CodeInvalidCharacters FieldCode = "InvalidCharacters"
+)
+
+// FieldError rejects one request field with a code; it never contains the submitted value.
 type FieldError struct {
-	Field   string
-	Message string
+	Field string
+	Code  FieldCode
 }
 
-func (e *FieldError) Error() string { return e.Field + ": " + e.Message }
+func (e *FieldError) Error() string { return e.Field + ": " + string(e.Code) }
 
 // validText rejects invalid UTF-8 and U+FFFD, which encoding/json substitutes for invalid bytes and
 // lone surrogates; accepting it would store a value other than the one the client sent.
@@ -31,27 +42,41 @@ func validText(s string) bool {
 	return utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError)
 }
 
+// lengthCode reports why a value of n code points is outside [lo, hi], or "" when it is inside.
+func lengthCode(n, lo, hi int) FieldCode {
+	switch {
+	case n == 0:
+		return CodeRequired
+	case n < lo:
+		return CodeTooShort
+	case n > hi:
+		return CodeTooLong
+	}
+	return ""
+}
+
 // CanonicalDisplayName trims Unicode whitespace and normalizes to NFC before counting code points.
 func CanonicalDisplayName(raw string) (string, error) {
-	reject := func(message string) error { return &FieldError{Field: "displayName", Message: message} }
+	reject := func(code FieldCode) error { return &FieldError{Field: "displayName", Code: code} }
 	if !validText(raw) {
-		return "", reject("must be valid UTF-8 text")
+		return "", reject(CodeInvalidCharacters)
 	}
 	name := norm.NFC.String(strings.TrimFunc(raw, unicode.IsSpace))
 	if strings.ContainsFunc(name, unicode.IsControl) {
-		return "", reject("must not contain control characters")
+		return "", reject(CodeInvalidCharacters)
 	}
-	if n := utf8.RuneCountInString(name); n < minDisplayName || n > maxDisplayName {
-		return "", reject("must contain 2 to 80 characters")
+	if code := lengthCode(utf8.RuneCountInString(name), minDisplayName, maxDisplayName); code != "" {
+		return "", reject(code)
 	}
 	return name, nil
 }
 
 // ValidateLogin accepts the immutable login. It is compared exactly, so surrounding whitespace is rejected.
+// Only the account file carries a login, so one code is enough.
 func ValidateLogin(login string) error {
 	if !validText(login) || login == "" || utf8.RuneCountInString(login) > maxLogin ||
 		strings.ContainsFunc(login, unicode.IsControl) || strings.TrimFunc(login, unicode.IsSpace) != login {
-		return &FieldError{Field: "login", Message: "must be 1 to 128 characters without control characters or surrounding spaces"}
+		return &FieldError{Field: "login", Code: CodeInvalidFormat}
 	}
 	return nil
 }
@@ -59,11 +84,15 @@ func ValidateLogin(login string) error {
 // CheckPassword accepts 8 to 32 code points of valid UTF-8; length is the only rule in this phase.
 // Passwords are never trimmed, normalized or truncated.
 func CheckPassword(password string) error {
-	if !validText(password) {
-		return &FieldError{Field: "newPassword", Message: "must be valid UTF-8 text"}
+	reject := func(code FieldCode) error { return &FieldError{Field: "newPassword", Code: code} }
+	if password == "" {
+		return reject(CodeRequired)
 	}
-	if n := utf8.RuneCountInString(password); n < minPassword || n > maxPassword {
-		return &FieldError{Field: "newPassword", Message: "must contain 8 to 32 characters"}
+	if !validText(password) {
+		return reject(CodeInvalidCharacters)
+	}
+	if code := lengthCode(utf8.RuneCountInString(password), minPassword, maxPassword); code != "" {
+		return reject(code)
 	}
 	return nil
 }

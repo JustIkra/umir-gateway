@@ -30,9 +30,8 @@ func TestUpdateDisplayName(t *testing.T) {
 func TestUpdateDisplayNameRejectsBeforeStorage(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
-	if _, err := f.svc.UpdateDisplayName(session.ID, "Я"); fieldOf(t, err) != "displayName" {
-		t.Errorf("short name: %v", err)
-	}
+	_, err := f.svc.UpdateDisplayName(session.ID, "Я")
+	wantFieldError(t, err, "displayName", CodeTooShort)
 	if _, err := f.svc.UpdateDisplayName("unknown", "Смена"); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("unknown session: %v", err)
 	}
@@ -123,10 +122,12 @@ func TestChangePasswordRejections(t *testing.T) {
 	if err := f.svc.ChangePassword(t.Context(), session.ID, "wrong current password", newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Errorf("wrong current: %v", err)
 	}
-	for _, rejected := range []string{"short12", strings.Repeat("я", 33)} {
-		if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, rejected); fieldOf(t, err) != "newPassword" {
-			t.Errorf("ChangePassword(%q) = %v", rejected, err)
-		}
+	for _, tc := range []struct {
+		password string
+		code     FieldCode
+	}{{"short12", CodeTooShort}, {strings.Repeat("я", 33), CodeTooLong}} {
+		err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, tc.password)
+		wantFieldError(t, err, "newPassword", tc.code)
 	}
 	if err := f.svc.ChangePassword(t.Context(), "unknown", testPassword, newPassword); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("unknown session: %v", err)
