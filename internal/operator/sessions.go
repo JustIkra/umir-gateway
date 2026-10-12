@@ -115,7 +115,7 @@ func stateOf(account Account, sessions map[string]*session) State {
 	for digest, st := range sessions {
 		stored = append(stored, StoredSession{
 			Digest: digest, RememberMe: st.rememberMe, CredentialVersion: st.credentialVersion,
-			Created: st.created, LastSeen: st.lastSeen, ExpiresAt: st.expires,
+			Created: st.created, LastSeen: storedLastSeen(st), ExpiresAt: st.expires,
 		})
 	}
 	slices.SortFunc(stored, func(a, b StoredSession) int {
@@ -125,6 +125,15 @@ func stateOf(account Account, sessions map[string]*session) State {
 		return strings.Compare(a.Digest, b.Digest)
 	})
 	return State{Account: account, Sessions: stored}
+}
+
+// storedLastSeen is the activity time to store. The file holds wall-clock times only, so after the wall
+// clock stepped back, activity measured on the monotonic clock is stored as the creation time.
+func storedLastSeen(st *session) time.Time {
+	if st.lastSeen.Round(0).Before(st.created.Round(0)) {
+		return st.created
+	}
+	return st.lastSeen
 }
 
 // change tells commitLocked which errors describe a failed commit.
@@ -137,8 +146,9 @@ const (
 
 // commitLocked stores account and sessions while s.mu is held and publishes them only after the store
 // confirms; sessions is a copy the caller prepared, and expired or outdated records are dropped from it.
-// A definite storage failure changes nothing. Any other failure enters fail-closed recovery until a
-// restart reloads the authoritative file.
+// A state the loader would reject is never written, so a restart can always load the file. A definite
+// storage failure changes nothing. Any other failure enters fail-closed recovery until a restart reloads
+// the authoritative file.
 func (s *Service) commitLocked(account Account, sessions map[string]*session, kind change) error {
 	now := s.opts.Now()
 	for digest, st := range sessions {
@@ -146,7 +156,13 @@ func (s *Service) commitLocked(account Account, sessions map[string]*session, ki
 			delete(sessions, digest)
 		}
 	}
-	err := s.opts.Store.Replace(stateOf(account, sessions))
+	state := stateOf(account, sessions)
+	err := ValidateState(state)
+	if err != nil {
+		err = fmt.Errorf("%w: refusing to store an invalid state: %w", ErrStorageUnavailable, err)
+	} else {
+		err = s.opts.Store.Replace(state)
+	}
 	switch {
 	case err == nil:
 		s.account, s.sessions = account, sessions

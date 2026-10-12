@@ -233,3 +233,38 @@ func TestPasswordChangeStoresNoSessions(t *testing.T) {
 		t.Errorf("stored state = %+v", last)
 	}
 }
+
+func TestBackwardClockStepKeepsTheStoredStateLoadable(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	writes := len(f.store.states())
+	f.clock.Advance(-2 * time.Second)
+	if _, _, err := f.svc.Current(session.ID); err != nil {
+		t.Fatalf("Current after the clock stepped back = %v", err)
+	}
+	if len(f.store.states()) == writes {
+		t.Fatal("Current stored nothing")
+	}
+	if err := ValidateState(f.store.last()); err != nil {
+		t.Fatalf("stored state: %v", err)
+	}
+	f.restart(t)
+}
+
+func TestCommitNeverStoresAStateTheLoaderRejects(t *testing.T) {
+	f := newFixture(t, nil)
+	broken, other := f.login(t), f.login(t)
+	f.svc.mu.Lock()
+	f.svc.sessions[digestOf(broken.ID)].created = time.Time{}
+	f.svc.mu.Unlock()
+	writes := len(f.store.states())
+	if err := f.svc.Logout(other.ID); !errors.Is(err, ErrSessionStorageUnavailable) {
+		t.Fatalf("Logout = %v", err)
+	}
+	if len(f.store.states()) != writes {
+		t.Error("an invalid state was stored")
+	}
+	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
+		t.Errorf("session after the refused commit: %v", err)
+	}
+}
