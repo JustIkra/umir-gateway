@@ -106,8 +106,9 @@ func (s *Service) restore(stored []StoredSession) {
 	evictOldest(s.sessions, s.opts.MaxSessions)
 }
 
-// evictOldest drops the oldest sessions until at most keep remain.
-func evictOldest(sessions map[string]*session, keep int) {
+// evictOldest drops the oldest sessions until at most keep remain and returns their digests.
+func evictOldest(sessions map[string]*session, keep int) []string {
+	var evicted []string
 	for len(sessions) > keep {
 		var oldestDigest string
 		var oldest *session
@@ -117,7 +118,9 @@ func evictOldest(sessions map[string]*session, keep int) {
 			}
 		}
 		delete(sessions, oldestDigest)
+		evicted = append(evicted, oldestDigest)
 	}
+	return evicted
 }
 
 // stateOf is what the store holds for account and sessions, oldest session first.

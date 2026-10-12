@@ -14,7 +14,7 @@ var ErrCurrentPasswordIncorrect = errors.New("current password incorrect")
 // UpdateDisplayName persists the canonical display name for the operator of session id.
 func (s *Service) UpdateDisplayName(id, raw string) (Profile, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	now := s.opts.Now()
 	st, err := s.activeLocked(id, now)
 	if err != nil {
@@ -30,6 +30,7 @@ func (s *Service) UpdateDisplayName(id, raw string) (Profile, error) {
 	if err := s.commitLocked(next, maps.Clone(s.sessions), accountChange); err != nil {
 		return Profile{}, err
 	}
+	s.extendedLocked(id, st)
 	return s.account.Profile(), nil
 }
 
@@ -87,15 +88,22 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.activeLocked(id, s.opts.Now()); err != nil {
+	defer s.unlock()
+	now = s.opts.Now()
+	if _, err := s.activeLocked(id, now); err != nil {
 		return err
 	}
 	updated := s.account
 	updated.PasswordHash = hash
 	updated.CredentialVersion++
+	revoked := s.sessions
 	if err := s.commitLocked(updated, map[string]*session{}, accountChange); err != nil {
 		return err
+	}
+	for digest, st := range revoked {
+		if !s.expired(st, now) {
+			s.endedLocked(digest, EndRevoked)
+		}
 	}
 	// The earlier wrong passwords were made against a password that no longer exists.
 	s.changeThrottle.failures = s.changeThrottle.failures[:0]
@@ -107,7 +115,7 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 // password change and revokes the calling session; the revocation is stored before it is reported.
 func (s *Service) recordWrongCurrent(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	// Recovery may have begun during the verification; no answer about the session is reliable then.
 	if s.recovering {
 		return ErrAuthUnavailable
@@ -126,6 +134,7 @@ func (s *Service) recordWrongCurrent(id string) error {
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
 		return err
 	}
+	s.endedLocked(sessionDigest(id), EndRevoked)
 	limited.SessionRevoked = true
 	return limited
 }
