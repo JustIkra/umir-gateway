@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -110,7 +111,8 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestGatewayChildProcess$")
-	child.Env = childEnvironment(map[string]string{
+	environment := operatorEnv(t)
+	maps.Copy(environment, map[string]string{
 		"UMIR_GATEWAY_TEST_CHILD": "1",
 		"PORT":                    port,
 		"SERVING_URL":             upstream.URL,
@@ -118,6 +120,7 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 		"UPSTREAM_TIMEOUT":        "5s",
 		"GORACE":                  "atexit_sleep_ms=0",
 	})
+	child.Env = childEnvironment(environment)
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -20,9 +20,9 @@ import (
 
 func gateway(t *testing.T, servingURL, warehouseURL string, timeout string) http.Handler {
 	t.Helper()
-	cfg, err := config.Load(func(key string) string {
-		return map[string]string{"SERVING_URL": servingURL, "WAREHOUSE_URL": warehouseURL, "UPSTREAM_TIMEOUT": timeout}[key]
-	})
+	values := operatorEnv(t)
+	values["SERVING_URL"], values["WAREHOUSE_URL"], values["UPSTREAM_TIMEOUT"] = servingURL, warehouseURL, timeout
+	cfg, err := config.Load(func(key string) string { return values[key] })
 	if err != nil {
 		t.Fatal(err)
 	}
