@@ -19,6 +19,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/config"
+	"github.com/JustIkra/umir-gateway/internal/expiration"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/journal"
 	"github.com/JustIkra/umir-gateway/internal/live"
@@ -62,15 +63,17 @@ func newAccounts(cfg config.Operator, observer operator.SessionObserver) (*opera
 	})
 }
 
-// components are the parts of one gateway process: the HTTP handler, the change journal and the live
-// streams.
+// components are the parts of one gateway process: the HTTP handler, the change journal, the live
+// streams and the expiration runs.
 type components struct {
 	handler http.Handler
 	journal *journal.Journal
 	streams *live.Streams
+	expiry  *expiration.Runner
 }
 
-// newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler.
+// newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
+// starts expiry itself.
 func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
 	events := live.NewSessionEvents()
 	accounts, err := newAccounts(cfg.Operator, events)
@@ -81,8 +84,9 @@ func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	upstream := live.NewUpstream()
 	streams, err := live.NewStreams(live.Options{
-		Changes: changes, Upstream: live.NewUpstream(), Sessions: accounts, Events: events, Clock: live.SystemClock{},
+		Changes: changes, Upstream: upstream, Sessions: accounts, Events: events, Clock: live.SystemClock{},
 		PerSession: live.DefaultPerSession, Total: live.DefaultTotal, Ping: live.DefaultPing, WriteTimeout: live.DefaultWriteTimeout,
 	})
 	if err != nil {
@@ -94,7 +98,19 @@ func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
-	return components{handler: handler, journal: changes, streams: streams}, nil
+	expiry, err := expiration.New(expiration.Options{
+		Client: &http.Client{Transport: transport}, Warehouse: cfg.WarehouseURL, Interval: cfg.ExpirationRunInterval,
+		Timeout: cfg.UpstreamTimeout, Journal: changes, Upstream: upstream, NewTicker: newTicker, Logger: logger,
+	})
+	if err != nil {
+		return components{}, err
+	}
+	return components{handler: handler, journal: changes, streams: streams, expiry: expiry}, nil
+}
+
+func newTicker(d time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(d)
+	return ticker.C, ticker.Stop
 }
 
 // newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
@@ -273,7 +289,16 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := run(signals, server, listener, shutdownGrace); err != nil {
+	// The process owns the expiration runs: they stop with the signal and finish before it exits.
+	runs := make(chan struct{})
+	go func() {
+		defer close(runs)
+		app.expiry.Run(signals)
+	}()
+	err = run(signals, server, listener, shutdownGrace)
+	stop()
+	<-runs
+	if err != nil {
 		log.Fatal(err)
 	}
 }
