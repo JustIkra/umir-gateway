@@ -19,6 +19,7 @@ components:
   accountfile: {in: "internal/adapters/accountfile/**"}
   operatorhttp: {in: "internal/operatorhttp/**"}
   strictjson: {in: "internal/strictjson/**"}
+  journal: {in: "internal/journal/**"}
 vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
@@ -55,3 +56,5 @@ deps:
     mayDependOn: [operatorhttp, operator, httpapi, strictjson]
   strictjson:
     mayDependOn: [strictjson]
+  journal:
+    mayDependOn: [journal]
