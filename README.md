@@ -51,7 +51,7 @@ Gateway не содержит бизнес-правил: он не создаё�
 {"code": "InvalidDisplayName", "message": "display name must contain 2 to 80 characters without control characters", "fieldErrors": {"displayName": "TooShort"}, "requestID": "7KB6W3EHBMZKTKVRO44KR6KSVH"}
 ```
 
-`message` предназначено для журналов и разработчиков: текст для пользователя фронтенд выбирает по `code` и кодам `fieldErrors`. `fieldErrors` есть только у ответов `422`. Тот же `requestID` записывается в журнал gateway.
+`message` предназначено для журналов и разработчиков: текст для пользователя фронтенд выбирает по `code` и кодам `fieldErrors`. `fieldErrors` есть только у ответов `422`, `sessionRevoked` — только у `PasswordChangeRateLimited`. Тот же `requestID` записывается в журнал gateway.
 
 ## Личный кабинет оператора
 
@@ -66,7 +66,7 @@ Gateway не содержит бизнес-правил: он не создаё�
 | `DELETE /api/operator/session` | `Origin` и токен сессии, без живой сессии — анонимный токен | `204` после записи отзыва в файл, cookie сессии очищается. Повтор безопасен. В режиме восстановления выход без cookie сессии проходит с анонимным токеном из `GET /api/operator/csrf`, а с cookie сессии получает `503 AuthUnavailable`: состояние файла неизвестно, и подтвердить выход нельзя. |
 | `GET /api/operator/me` | Сессия | `200 {"operator", "session"}`. Срок бездействия обычной сессии продлевается и записывается в файл до ответа. Если запись точно не удалась, ответ всё равно `200` со сроком, который уже записан в файле, и сессия продолжает работать. |
 | `PATCH /api/operator/me/display-name` | Сессия, `Origin`, `X-CSRF-Token` | `200 {"operator"}`. Тело: `{"displayName"}`. |
-| `PATCH /api/operator/me/password` | Сессия, `Origin`, `X-CSRF-Token` | `204`: все сессии, включая текущую, отозваны, нужен новый вход. Тело: `{"currentPassword", "newPassword"}`. |
+| `PATCH /api/operator/me/password` | Сессия, `Origin`, `X-CSRF-Token` | `204`: все сессии, включая текущую, отозваны, нужен новый вход. Тело: `{"currentPassword", "newPassword"}`. Пять неверных текущих паролей за 60 секунд, с любых сессий, включают паузу смены пароля на 60 секунд: пятая ошибка отзывает только свою сессию. Во время паузы смена отклоняется до проверки пароля, а новый вход паузу не снимает. |
 
 `operator` — это `{id, login, displayName}`. `session` — это `{expiresAt, idleExpiresAt, absoluteExpiresAt, rememberMe, csrfToken}`, время в RFC 3339 со смещением `+03:00`. Срок бездействия никогда не позже абсолютного, поэтому `expiresAt` равен `idleExpiresAt`. Ответы `/api/operator/*` не кешируются (`Cache-Control: no-store`).
 
@@ -99,13 +99,14 @@ Guard проверяет каждый запрос под `/api/serving/` и `/a
 | `InvalidCredentials` | 401 | Любое несовпадение логина или пароля; ответ не показывает, существует ли логин. |
 | `Unauthenticated` | 401 | Нет живой сессии. |
 | `InvalidOrigin`, `InvalidCsrfToken` | 403 | Изменяющий запрос пришёл не из публичного origin или без верного токена. |
-| `CurrentPasswordIncorrect` | 403 | Неверный текущий пароль, ничего не изменено. После пяти таких ответов сессия отзывается. |
+| `CurrentPasswordIncorrect` | 403 | Неверный текущий пароль, ничего не изменено; с первой по четвёртую ошибку за 60 секунд. |
 | `NotFound`, `MethodNotAllowed` | 404, 405 | Неизвестный маршрут кабинета или неподходящий метод. |
 | `PayloadTooLarge`, `UnsupportedMediaType` | 413, 415 | Тело больше 8 КиБ или не `application/json`. |
 | `InvalidDisplayName`, `PasswordRejected` | 422 | Поле не прошло проверку; код причины в `fieldErrors`. |
 | `LoginRateLimited` | 429 | Пять неудачных входов за 60 секунд включают паузу на 60 секунд для любого входа, или очередь проверки пароля заполнена. `Retry-After` — секунды до повтора. |
+| `PasswordChangeRateLimited` | 429 | Пятый неверный текущий пароль за 60 секунд или смена пароля во время паузы; пароль не изменён. `Retry-After` — секунды до конца паузы. `sessionRevoked: true`: этот ответ отозвал сессию, записал отзыв в файл и очистил cookie, нужен новый вход. `sessionRevoked: false`: сессия не тронута, недоступна только смена пароля. Если отзыв не записался, вместо `429` приходит `503 SessionStorageUnavailable` или `503 SessionUpdateOutcomeUnknown`. |
 | `AuthUnavailable` | 503 | Режим восстановления или внутренний сбой проверки. |
-| `SessionStorageUnavailable` | 503 | Вход или выход не записались в файл; ничего не изменилось, cookie не выдаётся и не очищается. |
+| `SessionStorageUnavailable` | 503 | Вход, выход или отзыв сессии после пятого неверного пароля не записались в файл; ничего не изменилось, cookie не выдаётся и не очищается. |
 | `SessionUpdateOutcomeUnknown` | 503 | Неизвестно, записалось ли изменение сессии; gateway переходит в режим восстановления. |
 | `AccountStorageUnavailable` | 503 | Запись файла не удалась до фиксации: ничего не изменено, сессии работают. |
 | `AccountUpdateOutcomeUnknown` | 503 | Неизвестно, записалось ли изменение; gateway переходит в режим восстановления. |
