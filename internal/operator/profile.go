@@ -104,16 +104,17 @@ func (s *Service) recordWrongCurrent(id string) error {
 	if s.recovering {
 		return ErrAuthUnavailable
 	}
-	if !s.changeThrottle.fail(s.opts.Now(), s.opts.FailureLimit, s.opts.FailureWindow, s.opts.Cooldown) {
+	now := s.opts.Now()
+	if !s.changeThrottle.fail(now, s.opts.FailureLimit, s.opts.FailureWindow, s.opts.Cooldown) {
 		return ErrCurrentPasswordIncorrect
 	}
 	limited := &PasswordChangeLimitError{RetryAfter: wholeSeconds(s.opts.Cooldown)}
-	digest := sessionDigest(id)
-	if _, ok := s.sessions[digest]; !ok {
+	// A session that ended during the verification is never restored; there is nothing to revoke.
+	if _, err := s.activeLocked(id, now); err != nil {
 		return limited
 	}
 	next := maps.Clone(s.sessions)
-	delete(next, digest)
+	delete(next, sessionDigest(id))
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
 		return err
 	}

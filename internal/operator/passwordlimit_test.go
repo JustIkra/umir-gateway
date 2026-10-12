@@ -163,3 +163,19 @@ func TestRecoveryDuringVerificationAnswersAuthUnavailable(t *testing.T) {
 		}
 	}
 }
+
+func TestLimitIgnoresASessionThatExpiredDuringVerification(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.IdleTimeout, o.AbsoluteTimeout = 10*time.Second, 10*time.Second })
+	session := f.login(t)
+	f.failPasswordChanges(t, session.ID, DefaultFailureLimit-1)
+	// The session reaches its absolute deadline while the fifth password is verified.
+	f.hasher.setOnVerify(func() {
+		f.clock.Advance(6 * time.Second)
+		f.store.setErr(errDiskFull)
+	})
+	var limited *PasswordChangeLimitError
+	err := f.svc.ChangePassword(t.Context(), session.ID, wrongCurrent, newPassword)
+	if !errors.As(err, &limited) || limited.SessionRevoked {
+		t.Fatalf("fifth wrong password after the session expired = %v", err)
+	}
+}
