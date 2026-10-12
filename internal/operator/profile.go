@@ -100,6 +100,10 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 func (s *Service) recordWrongCurrent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Recovery may have begun during the verification; no answer about the session is reliable then.
+	if s.recovering {
+		return ErrAuthUnavailable
+	}
 	if !s.changeThrottle.fail(s.opts.Now(), s.opts.FailureLimit, s.opts.FailureWindow, s.opts.Cooldown) {
 		return ErrCurrentPasswordIncorrect
 	}

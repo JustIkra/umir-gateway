@@ -2,6 +2,7 @@ package operator
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +144,22 @@ func TestFailedRevocationIsNotReportedAsRevoked(t *testing.T) {
 	f.store.setErr(nil)
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.As(err, &limited) || limited.SessionRevoked {
 		t.Errorf("the cooldown did not start: %v", err)
+	}
+}
+
+func TestRecoveryDuringVerificationAnswersAuthUnavailable(t *testing.T) {
+	for _, earlier := range []int{0, DefaultFailureLimit - 1} {
+		f := newFixture(t, nil)
+		caller, other := f.login(t), f.login(t)
+		f.failPasswordChanges(t, caller.ID, earlier)
+		f.hasher.setOnVerify(func() {
+			f.store.setErr(fmt.Errorf("%w: lost reply", ErrUpdateOutcomeUnknown))
+			if err := f.svc.Logout(other.ID); !errors.Is(err, ErrSessionUpdateOutcomeUnknown) {
+				t.Errorf("logout = %v", err)
+			}
+		})
+		if err := f.svc.ChangePassword(t.Context(), caller.ID, wrongCurrent, newPassword); !errors.Is(err, ErrAuthUnavailable) {
+			t.Errorf("after %d wrong passwords, recovery during the verification = %v", earlier, err)
+		}
 	}
 }
