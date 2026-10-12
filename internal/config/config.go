@@ -16,9 +16,11 @@ import (
 type Config struct {
 	Port string
 	// ListenHost is the IP address the server binds: loopback by default, 0.0.0.0 or :: in a container.
-	ListenHost      string
-	ServingURL      *url.URL
-	WarehouseURL    *url.URL
+	ListenHost   string
+	ServingURL   *url.URL
+	WarehouseURL *url.URL
+	// FeedbackURL is the private feedback service; the gateway sends it only POST /api/feedback.
+	FeedbackURL     *url.URL
 	UpstreamTimeout time.Duration
 	Operator        Operator
 }
@@ -67,6 +69,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.WarehouseURL, err = upstreamURL("WAREHOUSE_URL", value("WAREHOUSE_URL", "http://warehouse:8080")); err != nil {
+		return Config{}, err
+	}
+	if cfg.FeedbackURL, err = upstreamURL("FEEDBACK_URL", value("FEEDBACK_URL", "http://feedback:8080")); err != nil {
 		return Config{}, err
 	}
 	cfg.UpstreamTimeout, err = time.ParseDuration(value("UPSTREAM_TIMEOUT", "15s"))

@@ -36,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	if got := cfg.WarehouseURL.String(); got != "http://warehouse:8080" {
 		t.Errorf("warehouse: %s", got)
 	}
+	if got := cfg.FeedbackURL.String(); got != "http://feedback:8080" {
+		t.Errorf("feedback: %s", got)
+	}
 	if cfg.UpstreamTimeout != 15*time.Second {
 		t.Errorf("timeout: %s", cfg.UpstreamTimeout)
 	}
@@ -54,6 +57,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		"LISTEN_HOST":                      "0.0.0.0",
 		"SERVING_URL":                      "http://127.0.0.1:18082",
 		"WAREHOUSE_URL":                    "https://warehouse.internal:8443/base",
+		"FEEDBACK_URL":                     "http://127.0.0.1:18083",
 		"UPSTREAM_TIMEOUT":                 "2500ms",
 		"OPERATOR_COOKIE_MODE":             "secure",
 		"OPERATOR_PUBLIC_ORIGIN":           "https://xn----ctbhsteek4c3c.empty-lab.ru",
@@ -67,7 +71,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Port != "18081" || cfg.ListenHost != "0.0.0.0" || cfg.ServingURL.Host != "127.0.0.1:18082" ||
-		cfg.WarehouseURL.String() != "https://warehouse.internal:8443/base" ||
+		cfg.WarehouseURL.String() != "https://warehouse.internal:8443/base" || cfg.FeedbackURL.Host != "127.0.0.1:18083" ||
 		cfg.UpstreamTimeout != 2500*time.Millisecond {
 		t.Fatalf("config: %+v", cfg)
 	}
@@ -98,6 +102,8 @@ func TestLoadRejectsInvalidSettings(t *testing.T) {
 		{"WAREHOUSE_URL", "http://user:secret@warehouse:8080"},
 		{"WAREHOUSE_URL", "http://warehouse:8080?debug=1"},
 		{"WAREHOUSE_URL", "http://warehouse:8080/#fragment"},
+		{"FEEDBACK_URL", "feedback:8080"},
+		{"FEEDBACK_URL", "http://user:secret@feedback:8080"},
 		{"PORT", "http"},
 		{"PORT", "0"},
 		{"PORT", "65536"},
