@@ -25,11 +25,15 @@ func TestPasswordChangeLimit(t *testing.T) {
 	f := newFixture(t, nil)
 	caller, other := f.login(t), f.login(t)
 	f.failPasswordChanges(t, caller.ID, DefaultFailureLimit-1)
-	// The fifth wrong password within 60 seconds revokes only the calling session.
+	// The fifth wrong password within 60 seconds revokes only the calling session and changes nothing else.
+	writes := len(f.store.states())
 	var limited *PasswordChangeLimitError
 	err := f.svc.ChangePassword(t.Context(), caller.ID, wrongCurrent, newPassword)
 	if !errors.As(err, &limited) || limited.RetryAfter != DefaultCooldown || !limited.SessionRevoked {
 		t.Fatalf("fifth wrong password = %v", err)
+	}
+	if len(f.store.states()) != writes+1 || f.store.last().Account != testAccount() {
+		t.Errorf("stored %d states, account %+v; want one revocation and the same account", len(f.store.states())-writes, f.store.last().Account)
 	}
 	if _, _, err := f.svc.Authenticate(caller.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("calling session after the limit: %v", err)
