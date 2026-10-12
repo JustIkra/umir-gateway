@@ -71,7 +71,7 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.WarehouseURL, err = upstreamURL("WAREHOUSE_URL", value("WAREHOUSE_URL", "http://warehouse:8080")); err != nil {
 		return Config{}, err
 	}
-	if cfg.FeedbackURL, err = upstreamURL("FEEDBACK_URL", value("FEEDBACK_URL", "http://feedback:8080")); err != nil {
+	if cfg.FeedbackURL, err = upstreamURL("FEEDBACK_URL", value("FEEDBACK_URL", "http://feedback:8084")); err != nil {
 		return Config{}, err
 	}
 	cfg.UpstreamTimeout, err = time.ParseDuration(value("UPSTREAM_TIMEOUT", "15s"))

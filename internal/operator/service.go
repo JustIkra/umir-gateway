@@ -111,6 +111,9 @@ func NewService(state State, opts Options) (*Service, error) {
 		opts.FeedbackContextLimit <= 0 || opts.FeedbackProcessLimit <= 0 || opts.FeedbackWindow <= 0 {
 		return nil, errors.New("operator: session timeouts and bounds must be positive")
 	}
+	if opts.MaxSessions > DefaultMaxSessions {
+		return nil, errors.New("operator: max sessions exceeds the supported limit")
+	}
 	if err := ValidateState(state); err != nil {
 		return nil, err
 	}
@@ -205,8 +208,6 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string,
 	return s.account.Profile(), s.view(token, st), nil
 }
 
-// Authenticate admits a safe request of session id. Ordinary idle activity is kept in memory and stored
-// with the next commit; nothing is written here.
 func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -215,8 +216,7 @@ func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	if err != nil {
 		return Profile{}, Session{}, err
 	}
-	st.lastSeen = now
-	return s.account.Profile(), s.view(id, st), nil
+	return s.refreshActivityLocked(id, st, now)
 }
 
 // Authorize admits an unsafe request of session id, which must carry the session's CSRF token.
@@ -232,8 +232,21 @@ func (s *Service) Authorize(id, csrfToken string) (Profile, Session, error) {
 	if !MatchToken(sessionCSRF(id), csrfToken) {
 		return Profile{}, Session{}, ErrInvalidCSRFToken
 	}
-	st.lastSeen = now
-	return s.account.Profile(), s.view(id, st), nil
+	return s.refreshActivityLocked(id, st, now)
+}
+
+func (s *Service) refreshActivityLocked(id string, st *session, now time.Time) (Profile, Session, error) {
+	if st.rememberMe || now.Equal(st.storedLastSeen) {
+		return s.account.Profile(), s.view(id, st), nil
+	}
+	next := maps.Clone(s.sessions)
+	renewed := *st
+	renewed.lastSeen = now
+	next[sessionDigest(id)] = &renewed
+	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
+		return Profile{}, Session{}, err
+	}
+	return s.account.Profile(), s.view(id, &renewed), nil
 }
 
 // Current returns the profile and session for the operator's own view. An ordinary session's renewed

@@ -39,8 +39,8 @@ func TestLoginStorageFailureKeepsThePreviousSession(t *testing.T) {
 	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, previous.ID, false); !errors.Is(err, ErrSessionStorageUnavailable) {
 		t.Fatalf("Login = %v, want ErrSessionStorageUnavailable", err)
 	}
-	if _, _, err := f.svc.Authenticate(previous.ID); err != nil {
-		t.Errorf("previous session after a definite failure: %v", err)
+	if token, ok := f.svc.SessionCSRF(previous.ID); !ok || token != previous.CSRFToken {
+		t.Errorf("previous session after a definite failure: token %q, live %v", token, ok)
 	}
 	if n := len(f.svc.sessions); n != 1 {
 		t.Errorf("sessions = %d, want only the previous one", n)
@@ -91,8 +91,11 @@ func TestCurrentStoresTheOrdinaryIdleDeadlineBeforeReportingIt(t *testing.T) {
 	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.store.states()) != writes {
-		t.Errorf("a business request wrote the store")
+	if len(f.store.states()) != writes+1 {
+		t.Fatalf("business request stored %d states, want %d", len(f.store.states())-writes, 1)
+	}
+	if stored := f.store.last().Sessions; len(stored) != 1 || !stored[0].LastSeen.Equal(f.clock.Now()) {
+		t.Fatalf("stored sessions after business request = %+v, want lastSeen %v", stored, f.clock.Now())
 	}
 	f.clock.Advance(10 * time.Minute)
 	_, got, err := f.svc.Current(session.ID)
@@ -111,11 +114,11 @@ func TestCurrentReportsTheStoredDeadlineWhileStorageFails(t *testing.T) {
 	if _, _, err := f.svc.Current(session.ID); err != nil {
 		t.Fatal(err)
 	}
-	stored := f.clock.Now().Add(DefaultIdleTimeout)
 	f.clock.Advance(5 * time.Minute)
 	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
 		t.Fatal(err)
 	}
+	stored := f.clock.Now().Add(DefaultIdleTimeout)
 	f.store.setErr(errDiskFull)
 	f.clock.Advance(time.Minute)
 	_, got, err := f.svc.Current(session.ID)
@@ -211,8 +214,8 @@ func TestLogoutIsStoredBeforeItSucceeds(t *testing.T) {
 	if err := f.svc.Logout(session.ID); !errors.Is(err, ErrSessionStorageUnavailable) {
 		t.Fatalf("Logout = %v, want ErrSessionStorageUnavailable", err)
 	}
-	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
-		t.Errorf("a failed logout ended the session: %v", err)
+	if token, ok := f.svc.SessionCSRF(session.ID); !ok || token != session.CSRFToken {
+		t.Errorf("a failed logout ended the session: token %q, live %v", token, ok)
 	}
 	f.store.setErr(nil)
 	if err := f.svc.Logout(session.ID); err != nil {
@@ -285,8 +288,8 @@ func TestCommitNeverStoresAStateTheLoaderRejects(t *testing.T) {
 	if len(f.store.states()) != writes {
 		t.Error("an invalid state was stored")
 	}
-	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
-		t.Errorf("session after the refused commit: %v", err)
+	if token, ok := f.svc.SessionCSRF(other.ID); !ok || token != other.CSRFToken {
+		t.Errorf("session after the refused commit: token %q, live %v", token, ok)
 	}
 }
 

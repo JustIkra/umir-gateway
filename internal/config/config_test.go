@@ -36,7 +36,7 @@ func TestLoadDefaults(t *testing.T) {
 	if got := cfg.WarehouseURL.String(); got != "http://warehouse:8080" {
 		t.Errorf("warehouse: %s", got)
 	}
-	if got := cfg.FeedbackURL.String(); got != "http://feedback:8080" {
+	if got := cfg.FeedbackURL.String(); got != "http://feedback:8084" {
 		t.Errorf("feedback: %s", got)
 	}
 	if cfg.UpstreamTimeout != 15*time.Second {

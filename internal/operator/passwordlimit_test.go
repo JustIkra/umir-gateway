@@ -142,8 +142,8 @@ func TestFailedRevocationIsNotReportedAsRevoked(t *testing.T) {
 	if !errors.Is(err, ErrSessionStorageUnavailable) || errors.As(err, &limited) {
 		t.Fatalf("fifth wrong password with a failing store = %v", err)
 	}
-	if _, _, err := f.svc.Authenticate(session.ID); err != nil {
-		t.Errorf("session after a failed revocation: %v", err)
+	if token, ok := f.svc.SessionCSRF(session.ID); !ok || token != session.CSRFToken {
+		t.Errorf("session after a failed revocation: token %q, live %v", token, ok)
 	}
 	f.store.setErr(nil)
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.As(err, &limited) || limited.SessionRevoked {

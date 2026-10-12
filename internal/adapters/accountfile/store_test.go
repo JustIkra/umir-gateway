@@ -2,6 +2,7 @@ package accountfile
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,40 @@ func TestOpenRejectsCorruptFileWithoutResetting(t *testing.T) {
 		}
 		if data, readErr := os.ReadFile(path); readErr != nil || string(data) != content {
 			t.Errorf("%s: corrupt file was replaced (%v)", name, readErr)
+		}
+	}
+}
+
+func TestOpenEnforcesThe32SessionRecordLimit(t *testing.T) {
+	for _, tc := range []struct {
+		count   int
+		wantErr bool
+	}{
+		{count: 32},
+		{count: 33, wantErr: true},
+	} {
+		var records []string
+		for i := range tc.count {
+			records = append(records, fmt.Sprintf(
+				`{"digest":"%064x","rememberMe":false,"credentialVersion":3,"createdAt":"2026-10-11T09:00:00Z","lastSeenAt":"2026-10-11T09:10:00Z","expiresAt":"2026-10-11T17:00:00Z"}`,
+				i+1,
+			))
+		}
+		content := withSessions(strings.Join(records, ","))
+		path := filepath.Join(accountDir(t), "account.json")
+		writeAccount(t, path, content)
+		state, _, err := Open(path, testBootstrap(), testOptions())
+		if tc.wantErr {
+			if err == nil || !strings.Contains(err.Error(), "session") {
+				t.Errorf("%d valid session records: error = %v, want session-limit rejection", tc.count, err)
+			}
+			if data, readErr := os.ReadFile(path); readErr != nil || string(data) != content {
+				t.Errorf("%d records: rejected file was changed (%v)", tc.count, readErr)
+			}
+			continue
+		}
+		if err != nil || len(state.Sessions) != 32 {
+			t.Errorf("%d valid session records: loaded %d, error %v", tc.count, len(state.Sessions), err)
 		}
 	}
 }

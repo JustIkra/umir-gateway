@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,31 @@ func TestValidateState(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		} else if strings.Contains(err.Error(), "a1a1") {
 			t.Errorf("%s: error repeats the digest: %v", name, err)
+		}
+	}
+}
+
+func TestValidateStateLimitsSessionsTo32(t *testing.T) {
+	created := time.Date(2026, 10, 11, 12, 0, 0, 0, moscow)
+	for _, tc := range []struct {
+		count   int
+		wantErr bool
+	}{
+		{count: 32},
+		{count: 33, wantErr: true},
+	} {
+		sessions := make([]StoredSession, tc.count)
+		for i := range sessions {
+			sessions[i] = StoredSession{
+				Digest: fmt.Sprintf("%064x", i+1), CredentialVersion: 1,
+				Created: created, LastSeen: created.Add(time.Minute), ExpiresAt: created.Add(8 * time.Hour),
+			}
+		}
+		err := ValidateState(State{Account: testAccount(), Sessions: sessions})
+		if tc.wantErr && err == nil {
+			t.Errorf("%d valid session records: accepted, want rejection", tc.count)
+		} else if !tc.wantErr && err != nil {
+			t.Errorf("%d valid session records: %v", tc.count, err)
 		}
 	}
 }

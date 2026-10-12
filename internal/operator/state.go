@@ -31,6 +31,9 @@ func ValidateState(s State) error {
 	if err := ValidateAccount(s.Account); err != nil {
 		return err
 	}
+	if len(s.Sessions) > DefaultMaxSessions {
+		return errors.New("sessions: exceeds the maximum count")
+	}
 	seen := make(map[string]bool, len(s.Sessions))
 	for _, st := range s.Sessions {
 		switch {

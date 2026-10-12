@@ -52,11 +52,14 @@ func TestDefiniteStorageFailureChangesNothing(t *testing.T) {
 	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.Is(err, ErrStorageUnavailable) {
 		t.Fatalf("ChangePassword = %v", err)
 	}
+	if token, ok := f.svc.SessionCSRF(session.ID); !ok || token != session.CSRFToken {
+		t.Fatalf("known storage failures ended the session: token %q, live %v", token, ok)
+	}
+	f.store.setErr(nil)
 	profile, _, err := f.svc.Authenticate(session.ID)
 	if err != nil || profile.DisplayName != "Оператор" {
 		t.Fatalf("after failures: %+v, %v", profile, err)
 	}
-	f.store.setErr(nil)
 	if _, _, err := f.svc.Login(t.Context(), "operator", testPassword, "", false); err != nil {
 		t.Errorf("old password stopped working: %v", err)
 	}

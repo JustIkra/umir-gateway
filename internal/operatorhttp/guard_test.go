@@ -2,6 +2,7 @@ package operatorhttp
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,37 @@ func TestProtectAdmitsTheSession(t *testing.T) {
 	}
 	if calls := up.calls(); !slices.Equal(calls, methods) {
 		t.Errorf("upstream calls = %v", calls)
+	}
+}
+
+func TestProtectRejectsWhenOrdinaryActivityCannotBeStored(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		method   string
+		storeErr error
+		code     string
+	}{
+		{"safe known failure", http.MethodGet, fmt.Errorf("disk full: %w", operator.ErrStorageUnavailable), "SessionStorageUnavailable"},
+		{"safe unknown outcome", http.MethodGet, errors.New("rename outcome unknown"), "SessionUpdateOutcomeUnknown"},
+		{"unsafe known failure", http.MethodPost, fmt.Errorf("disk full: %w", operator.ErrStorageUnavailable), "SessionStorageUnavailable"},
+		{"unsafe unknown outcome", http.MethodPost, errors.New("rename outcome unknown"), "SessionUpdateOutcomeUnknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := loopbackFixture(t)
+			session, token := f.login()
+			f.clock.Advance(time.Minute)
+			f.store.fail(tc.storeErr)
+			up := &upstream{t: t}
+			c := call{method: tc.method, path: "/api/serving/orders", cookies: []*http.Cookie{session}}
+			if tc.method != http.MethodGet {
+				c.csrf, c.origin = token, testOrigin
+			}
+			w := f.send(f.api.Protect(up), c)
+			wantProblem(t, w, http.StatusServiceUnavailable, tc.code)
+			if calls := up.calls(); len(calls) != 0 {
+				t.Fatalf("request reached the upstream after failed activity commit: %v", calls)
+			}
+		})
 	}
 }
 
