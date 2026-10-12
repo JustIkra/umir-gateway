@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
 )
@@ -65,20 +66,20 @@ func (f *faultFS) ReadFile(path string) ([]byte, error) {
 	return f.osFileSystem.ReadFile(path)
 }
 
-func openWith(t *testing.T, fs fileSystem) (string, operator.Account, *Store) {
+func openWith(t *testing.T, fs fileSystem) (string, operator.State, *Store) {
 	t.Helper()
 	path := filepath.Join(accountDir(t), "account.json")
 	writeAccount(t, path, validFile)
-	account, store, err := open(path, Bootstrap{}, testOptions(), fs)
+	state, store, err := open(path, Bootstrap{}, testOptions(), fs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return path, account, store
+	return path, state, store
 }
 
-func renamedAccount(account operator.Account) operator.Account {
-	account.DisplayName = "Новое имя"
-	return account
+func renamed(state operator.State) operator.State {
+	state.Account.DisplayName = "Новое имя"
+	return state
 }
 
 func assertNoTempFiles(t *testing.T, dir string) {
@@ -95,13 +96,13 @@ func assertNoTempFiles(t *testing.T, dir string) {
 }
 
 func TestReplaceCommitsWholeFile(t *testing.T) {
-	path, account, store := openWith(t, osFileSystem{uid: os.Geteuid()})
-	next := renamedAccount(account)
+	path, state, store := openWith(t, osFileSystem{uid: os.Geteuid()})
+	next := renamed(state)
 	if err := store.Replace(next); err != nil {
 		t.Fatal(err)
 	}
 	reopened, _, err := Open(path, Bootstrap{}, testOptions())
-	if err != nil || reopened != next {
+	if err != nil || reopened.Account != next.Account {
 		t.Fatalf("reopened = %+v, %v", reopened, err)
 	}
 	if info, err := os.Lstat(path); err != nil || info.Mode().Perm() != 0o600 {
@@ -126,8 +127,8 @@ func TestReplaceClassifiesFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.fs.osFileSystem = osFileSystem{uid: os.Geteuid()}
-			path, account, store := openWith(t, tc.fs)
-			err := store.Replace(renamedAccount(account))
+			path, state, store := openWith(t, tc.fs)
+			err := store.Replace(renamed(state))
 			definite := errors.Is(err, operator.ErrStorageUnavailable) && !errors.Is(err, operator.ErrUpdateOutcomeUnknown)
 			unknown := errors.Is(err, operator.ErrUpdateOutcomeUnknown) && !errors.Is(err, operator.ErrStorageUnavailable)
 			if (tc.definite && !definite) || (!tc.definite && !unknown) {
@@ -146,29 +147,29 @@ func TestReplaceClassifiesFailures(t *testing.T) {
 }
 
 func TestOpenIgnoresStrayTempFile(t *testing.T) {
-	path, account, _ := openWith(t, osFileSystem{uid: os.Geteuid()})
+	path, state, _ := openWith(t, osFileSystem{uid: os.Geteuid()})
 	stray := filepath.Join(filepath.Dir(path), ".account-123.tmp")
 	if err := os.WriteFile(stray, []byte("{partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	reopened, store, err := Open(path, Bootstrap{}, testOptions())
-	if err != nil || reopened != account {
+	if err != nil || reopened.Account != state.Account {
 		t.Fatalf("reopened = %+v, %v", reopened, err)
 	}
-	if err := store.Replace(renamedAccount(account)); err != nil {
+	if err := store.Replace(renamed(state)); err != nil {
 		t.Fatalf("Replace with stray temp file: %v", err)
 	}
 }
 
 func TestConcurrentReplacesLeaveOneValidDocument(t *testing.T) {
-	path, account, store := openWith(t, osFileSystem{uid: os.Geteuid()})
+	path, state, store := openWith(t, osFileSystem{uid: os.Geteuid()})
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			next := account
-			next.CredentialVersion = int64(10 + i)
+			next := state
+			next.Account.CredentialVersion = int64(10 + i)
 			if err := store.Replace(next); err != nil {
 				t.Errorf("Replace %d: %v", i, err)
 			}
@@ -176,7 +177,45 @@ func TestConcurrentReplacesLeaveOneValidDocument(t *testing.T) {
 	}
 	wg.Wait()
 	reopened, _, err := Open(path, Bootstrap{}, testOptions())
-	if err != nil || reopened.CredentialVersion < 10 || reopened.CredentialVersion > 17 {
+	if err != nil || reopened.Account.CredentialVersion < 10 || reopened.Account.CredentialVersion > 17 {
 		t.Fatalf("reopened = %+v, %v", reopened, err)
 	}
+}
+
+func TestReplaceStoresSessions(t *testing.T) {
+	path, state, store := openWith(t, osFileSystem{uid: os.Geteuid()})
+	created := time.Date(2026, 10, 11, 12, 0, 0, 123, time.FixedZone("MSK", 3*60*60))
+	state.Sessions = []operator.StoredSession{
+		{Digest: testDigest, CredentialVersion: 3, Created: created, LastSeen: created.Add(time.Minute), ExpiresAt: created.Add(8 * time.Hour)},
+		{Digest: strings.Repeat("f", 64), RememberMe: true, CredentialVersion: 2, Created: created, LastSeen: created, ExpiresAt: created.Add(30 * 24 * time.Hour)},
+	}
+	if err := store.Replace(state); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _, err := Open(path, Bootstrap{}, testOptions())
+	if err != nil || len(reopened.Sessions) != 2 {
+		t.Fatalf("reopened = %+v, %v", reopened, err)
+	}
+	for i, got := range reopened.Sessions {
+		want := state.Sessions[i]
+		if got.Digest != want.Digest || got.RememberMe != want.RememberMe || got.CredentialVersion != want.CredentialVersion ||
+			!got.Created.Equal(want.Created) || !got.LastSeen.Equal(want.LastSeen) || !got.ExpiresAt.Equal(want.ExpiresAt) {
+			t.Errorf("session %d = %+v, want %+v", i, got, want)
+		}
+	}
+	if data, err := os.ReadFile(path); err != nil || strings.Contains(string(data), "+03:00") {
+		t.Errorf("session times are not stored in UTC: %v", err)
+	}
+}
+
+func TestFailedMigrationKeepsTheAccountOnlyFile(t *testing.T) {
+	path := filepath.Join(accountDir(t), "account.json")
+	writeAccount(t, path, accountOnlyFile)
+	if _, _, err := open(path, Bootstrap{}, testOptions(), &faultFS{osFileSystem: osFileSystem{uid: os.Geteuid()}, failCreate: true}); err == nil {
+		t.Fatal("migration failure ignored")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != accountOnlyFile {
+		t.Errorf("account-only file changed after a failed migration: %v", err)
+	}
+	assertNoTempFiles(t, filepath.Dir(path))
 }

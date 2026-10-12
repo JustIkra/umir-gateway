@@ -38,10 +38,10 @@ var (
 	ErrUpdateOutcomeUnknown = errors.New("account update outcome unknown")
 )
 
-// Store persists the whole account. Replace wraps ErrStorageUnavailable only for failures
-// known to precede the commit; every other failure is treated as an unknown outcome.
+// Store persists the whole State in one atomic commit. Replace wraps ErrStorageUnavailable only for
+// failures known to precede the commit; every other failure is treated as an unknown outcome.
 type Store interface {
-	Replace(next Account) error
+	Replace(next State) error
 }
 
 // PasswordHasher owns the password hash format.

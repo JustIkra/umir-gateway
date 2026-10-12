@@ -25,7 +25,7 @@ func accountDir(t *testing.T) string {
 func testOptions() Options {
 	return Options{
 		NewProfileID: func() (string, error) { return "PROFILE1", nil },
-		Validate:     operator.ValidateAccount,
+		Validate:     operator.ValidateState,
 	}
 }
 
@@ -41,6 +41,18 @@ func writeAccount(t *testing.T, path, content string) {
 }
 
 const validFile = `{
+  "schemaVersion": 2,
+  "profileID": "PROFILE1",
+  "login": "operator",
+  "displayName": "Оператор",
+  "passwordHash": "` + fakeHash + `",
+  "credentialVersion": 3,
+  "sessions": []
+}
+`
+
+// accountOnlyFile is the first schema, written before sessions were persisted.
+const accountOnlyFile = `{
   "schemaVersion": 1,
   "profileID": "PROFILE1",
   "login": "operator",
@@ -50,17 +62,26 @@ const validFile = `{
 }
 `
 
+const validSession = `{"digest": "` + testDigest + `", "rememberMe": false, "credentialVersion": 3, ` +
+	`"createdAt": "2026-10-11T09:00:00Z", "lastSeenAt": "2026-10-11T09:10:00Z", "expiresAt": "2026-10-11T17:00:00Z"}`
+
+const testDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func withSessions(sessions string) string {
+	return strings.Replace(validFile, `"sessions": []`, `"sessions": [`+sessions+`]`, 1)
+}
+
 func TestOpenLoadsExistingFileAndIgnoresBootstrap(t *testing.T) {
 	path := filepath.Join(accountDir(t), "account.json")
 	writeAccount(t, path, validFile)
 	other := Bootstrap{Login: "intruder", DisplayName: "Другой", PasswordHash: fakeHash}
-	account, store, err := Open(path, other, testOptions())
+	state, store, err := Open(path, other, testOptions())
 	if err != nil || store == nil {
 		t.Fatal(err)
 	}
 	want := operator.Account{ProfileID: "PROFILE1", Login: "operator", DisplayName: "Оператор", PasswordHash: fakeHash, CredentialVersion: 3}
-	if account != want {
-		t.Fatalf("account = %+v", account)
+	if state.Account != want || len(state.Sessions) != 0 {
+		t.Fatalf("state = %+v", state)
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != validFile {
 		t.Fatalf("existing file was rewritten: %v", err)
@@ -69,19 +90,23 @@ func TestOpenLoadsExistingFileAndIgnoresBootstrap(t *testing.T) {
 
 func TestOpenBootstrapsAbsentFile(t *testing.T) {
 	path := filepath.Join(accountDir(t), "account.json")
-	account, _, err := Open(path, testBootstrap(), testOptions())
+	state, _, err := Open(path, testBootstrap(), testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.ProfileID != "PROFILE1" || account.CredentialVersion != 1 || account.Login != "operator" {
-		t.Fatalf("account = %+v", account)
+	account := state.Account
+	if account.ProfileID != "PROFILE1" || account.CredentialVersion != 1 || account.Login != "operator" || len(state.Sessions) != 0 {
+		t.Fatalf("state = %+v", state)
+	}
+	if data, err := os.ReadFile(path); err != nil || !strings.Contains(string(data), `"schemaVersion": 2`) {
+		t.Fatalf("bootstrap file is not schema 2: %s %v", data, err)
 	}
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("file: %v %v", info, err)
 	}
 	reopened, _, err := Open(path, Bootstrap{}, testOptions())
-	if err != nil || reopened != account {
+	if err != nil || reopened.Account != account || len(reopened.Sessions) != 0 {
 		t.Fatalf("reopened = %+v, %v", reopened, err)
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
@@ -115,19 +140,32 @@ func TestOpenRejectsMissingBootstrapWithoutCreatingFile(t *testing.T) {
 
 func TestOpenRejectsCorruptFileWithoutResetting(t *testing.T) {
 	for name, content := range map[string]string{
-		"invalid JSON":      `{"schemaVersion": 1,`,
-		"unknown field":     strings.Replace(validFile, `"credentialVersion"`, `"role": "admin", "credentialVersion"`, 1),
-		"duplicate key":     strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "credentialVersion": 4`, 1),
-		"trailing data":     validFile + "{}",
-		"schema 2":          strings.Replace(validFile, `"schemaVersion": 1`, `"schemaVersion": 2`, 1),
-		"missing schema":    strings.Replace(validFile, `"schemaVersion": 1,`, ``, 1),
-		"invalid UTF-8":     strings.Replace(validFile, "Оператор", "Опе\xffратор", 1),
-		"version zero":      strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 0`, 1),
-		"not an object":     `[1]`,
-		"case-variant key":  strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "LOGIN": "intruder"`, 1),
-		"case-variant only": strings.Replace(validFile, `"schemaVersion"`, `"SchemaVersion"`, 1),
-		"lone surrogate":    strings.Replace(validFile, "Оператор", `Опе\ud800ратор`, 1),
-		"too large":         strings.Replace(validFile, "Оператор", strings.Repeat("я", maxFileSize), 1),
+		"invalid JSON":   `{"schemaVersion": 1,`,
+		"unknown field":  strings.Replace(validFile, `"credentialVersion"`, `"role": "admin", "credentialVersion"`, 1),
+		"duplicate key":  strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "credentialVersion": 4`, 1),
+		"trailing data":  validFile + "{}",
+		"schema 3":       strings.Replace(validFile, `"schemaVersion": 2`, `"schemaVersion": 3`, 1),
+		"missing schema": strings.Replace(validFile, `"schemaVersion": 2,`, ``, 1),
+		"schema 2 without sessions": strings.Replace(validFile, `,
+  "sessions": []`, ``, 1),
+		"schema 1 with sessions":   strings.Replace(accountOnlyFile, `"credentialVersion": 3`, `"credentialVersion": 3, "sessions": []`, 1),
+		"sessions not a list":      strings.Replace(validFile, `"sessions": []`, `"sessions": {}`, 1),
+		"sessions null":            strings.Replace(validFile, `"sessions": []`, `"sessions": null`, 1),
+		"session not an object":    withSessions(`1`),
+		"unknown session field":    withSessions(strings.Replace(validSession, `"rememberMe"`, `"role": "admin", "rememberMe"`, 1)),
+		"case-variant session key": withSessions(strings.Replace(validSession, `"digest"`, `"Digest"`, 1)),
+		"duplicate session key":    withSessions(strings.Replace(validSession, `"rememberMe": false`, `"rememberMe": false, "rememberMe": true`, 1)),
+		"missing session field":    withSessions(strings.Replace(validSession, `"rememberMe": false, `, ``, 1)),
+		"invalid session time":     withSessions(strings.Replace(validSession, `"2026-10-11T09:00:00Z"`, `"yesterday"`, 1)),
+		"invalid session digest":   withSessions(strings.Replace(validSession, testDigest, "not-a-digest", 1)),
+		"duplicate session":        withSessions(validSession + ", " + validSession),
+		"invalid UTF-8":            strings.Replace(validFile, "Оператор", "Опе\xffратор", 1),
+		"version zero":             strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 0`, 1),
+		"not an object":            `[1]`,
+		"case-variant key":         strings.Replace(validFile, `"credentialVersion": 3`, `"credentialVersion": 3, "LOGIN": "intruder"`, 1),
+		"case-variant only":        strings.Replace(validFile, `"schemaVersion"`, `"SchemaVersion"`, 1),
+		"lone surrogate":           strings.Replace(validFile, "Оператор", `Опе\ud800ратор`, 1),
+		"too large":                strings.Replace(validFile, "Оператор", strings.Repeat("я", maxFileSize), 1),
 	} {
 		path := filepath.Join(accountDir(t), "account.json")
 		writeAccount(t, path, content)
@@ -194,10 +232,34 @@ func TestOpenKeepsALiteralReplacementCharacter(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(accountDir(t), "account.json")
 			writeAccount(t, path, strings.Replace(validFile, "Оператор", spelled, 1))
-			account, _, err := Open(path, testBootstrap(), testOptions())
-			if err != nil || account.DisplayName != "Опе\uFFFDратор" {
-				t.Fatalf("account = %+v, %v", account, err)
+			state, _, err := Open(path, testBootstrap(), testOptions())
+			if err != nil || state.Account.DisplayName != "Опе\uFFFDратор" {
+				t.Fatalf("state = %+v, %v", state, err)
 			}
 		})
+	}
+}
+
+func TestOpenMigratesAccountOnlyFile(t *testing.T) {
+	path := filepath.Join(accountDir(t), "account.json")
+	writeAccount(t, path, accountOnlyFile)
+	state, _, err := Open(path, testBootstrap(), testOptions())
+	want := operator.Account{ProfileID: "PROFILE1", Login: "operator", DisplayName: "Оператор", PasswordHash: fakeHash, CredentialVersion: 3}
+	if err != nil || state.Account != want || len(state.Sessions) != 0 {
+		t.Fatalf("state = %+v, %v", state, err)
+	}
+	migrated, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(migrated), `"schemaVersion": 2`) || !strings.Contains(string(migrated), `"sessions": []`) {
+		t.Fatalf("file was not migrated: %s %v", migrated, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("migrated file: %v, %v", info, err)
+	}
+	reopened, _, err := Open(path, Bootstrap{}, testOptions())
+	if err != nil || reopened.Account != want {
+		t.Fatalf("reopened = %+v, %v", reopened, err)
+	}
+	if again, err := os.ReadFile(path); err != nil || string(again) != string(migrated) {
+		t.Errorf("a schema 2 file was rewritten on open: %v", err)
 	}
 }

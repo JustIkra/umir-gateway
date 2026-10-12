@@ -99,13 +99,13 @@ type fakeStore struct {
 	replaced []Account
 }
 
-func (s *fakeStore) Replace(next Account) error {
+func (s *fakeStore) Replace(next State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
-	s.replaced = append(s.replaced, next)
+	s.replaced = append(s.replaced, next.Account)
 	return nil
 }
 

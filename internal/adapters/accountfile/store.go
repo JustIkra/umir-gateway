@@ -10,12 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
 	"github.com/JustIkra/umir-gateway/internal/strictjson"
 )
 
-const schemaVersion = 1
+const (
+	accountOnlySchema = 1
+	schemaVersion     = 2
+)
 
 // Bootstrap creates the account only when the file does not exist yet.
 type Bootstrap struct {
@@ -27,8 +31,8 @@ type Bootstrap struct {
 type Options struct {
 	// NewProfileID creates the opaque ID of a bootstrapped account.
 	NewProfileID func() (string, error)
-	// Validate rejects account fields before they are returned or first written.
-	Validate func(operator.Account) error
+	// Validate rejects the state before it is returned or first written.
+	Validate func(operator.State) error
 }
 
 // Store replaces the account file; it serializes its own writes.
@@ -40,90 +44,123 @@ type Store struct {
 	current []byte // committed file content, used to classify a failed rename
 }
 
+// document is the account file. Schema 1 has no sessions; schema 2 always has the sessions list.
 type document struct {
-	SchemaVersion     int    `json:"schemaVersion"`
-	ProfileID         string `json:"profileID"`
-	Login             string `json:"login"`
-	DisplayName       string `json:"displayName"`
-	PasswordHash      string `json:"passwordHash"`
-	CredentialVersion int64  `json:"credentialVersion"`
+	SchemaVersion     int               `json:"schemaVersion"`
+	ProfileID         string            `json:"profileID"`
+	Login             string            `json:"login"`
+	DisplayName       string            `json:"displayName"`
+	PasswordHash      string            `json:"passwordHash"`
+	CredentialVersion int64             `json:"credentialVersion"`
+	Sessions          []sessionDocument `json:"sessions"`
+}
+
+type sessionDocument struct {
+	Digest            string    `json:"digest"`
+	RememberMe        bool      `json:"rememberMe"`
+	CredentialVersion int64     `json:"credentialVersion"`
+	CreatedAt         time.Time `json:"createdAt"`
+	LastSeenAt        time.Time `json:"lastSeenAt"`
+	ExpiresAt         time.Time `json:"expiresAt"`
 }
 
 var errInvalidFile = errors.New("operator account file: invalid JSON document")
 
-// knownKeys are the only accepted keys. encoding/json matches field names case-insensitively, so an
-// exact check is what keeps "LOGIN" or "SchemaVersion" from loading.
-var knownKeys = map[string]bool{
-	"schemaVersion": true, "profileID": true, "login": true,
-	"displayName": true, "passwordHash": true, "credentialVersion": true,
-}
+// The exact keys of each schema and of a session record. encoding/json matches field names
+// case-insensitively, so an exact check is what keeps "LOGIN" or "Digest" from loading.
+var (
+	schemaKeys = map[int]map[string]bool{
+		accountOnlySchema: {
+			"schemaVersion": true, "profileID": true, "login": true,
+			"displayName": true, "passwordHash": true, "credentialVersion": true,
+		},
+		schemaVersion: {
+			"schemaVersion": true, "profileID": true, "login": true,
+			"displayName": true, "passwordHash": true, "credentialVersion": true, "sessions": true,
+		},
+	}
+	sessionKeys = map[string]bool{
+		"digest": true, "rememberMe": true, "credentialVersion": true,
+		"createdAt": true, "lastSeenAt": true, "expiresAt": true,
+	}
+)
 
-// Open loads the account at path. An absent file is created from bootstrap; an existing file is
-// authoritative and never rewritten here. Errors never contain account values.
-func Open(path string, bootstrap Bootstrap, opts Options) (operator.Account, *Store, error) {
+// Open loads the account and its sessions at path. An absent file is created from bootstrap; an
+// existing file is authoritative. A schema 1 file is rewritten once as schema 2 with no sessions, and a
+// failed rewrite stops startup instead of resetting anything. Errors never contain account values.
+func Open(path string, bootstrap Bootstrap, opts Options) (operator.State, *Store, error) {
 	return open(path, bootstrap, opts, osFileSystem{uid: os.Geteuid()})
 }
 
-func open(path string, bootstrap Bootstrap, opts Options, fs fileSystem) (operator.Account, *Store, error) {
+func open(path string, bootstrap Bootstrap, opts Options, fs fileSystem) (operator.State, *Store, error) {
 	if opts.NewProfileID == nil || opts.Validate == nil {
-		return operator.Account{}, nil, errors.New("accountfile: NewProfileID and Validate are required")
+		return operator.State{}, nil, errors.New("accountfile: NewProfileID and Validate are required")
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return operator.Account{}, nil, errors.New("OPERATOR_STORE_PATH: expected a clean absolute path")
+		return operator.State{}, nil, errors.New("OPERATOR_STORE_PATH: expected a clean absolute path")
 	}
 	store := &Store{path: path, dir: filepath.Dir(path), fs: fs}
 	if err := fs.CheckDir(store.dir); err != nil {
-		return operator.Account{}, nil, fmt.Errorf("OPERATOR_STORE_PATH directory: %w", err)
+		return operator.State{}, nil, fmt.Errorf("OPERATOR_STORE_PATH directory: %w", err)
 	}
 	data, err := fs.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		account, err := store.bootstrap(bootstrap, opts)
-		return account, store, err
+		state, err := store.bootstrap(bootstrap, opts)
+		return state, store, err
 	}
 	if err != nil {
-		return operator.Account{}, nil, fmt.Errorf("OPERATOR_STORE_PATH: %w", err)
+		return operator.State{}, nil, fmt.Errorf("OPERATOR_STORE_PATH: %w", err)
 	}
-	account, err := decode(data)
+	state, version, err := decode(data)
 	if err == nil {
-		err = opts.Validate(account)
+		err = opts.Validate(state)
 	}
 	if err != nil {
-		return operator.Account{}, nil, fmt.Errorf("operator account file: %w", err)
+		return operator.State{}, nil, fmt.Errorf("operator account file: %w", err)
 	}
 	store.current = data
-	return account, store, nil
+	if version == accountOnlySchema {
+		if err := store.commit(state); err != nil {
+			return operator.State{}, nil, fmt.Errorf("migrate operator account file to schema %d: %w", schemaVersion, err)
+		}
+	}
+	return state, store, nil
 }
 
-func (s *Store) bootstrap(bootstrap Bootstrap, opts Options) (operator.Account, error) {
+func (s *Store) bootstrap(bootstrap Bootstrap, opts Options) (operator.State, error) {
 	if bootstrap.Login == "" || bootstrap.DisplayName == "" || bootstrap.PasswordHash == "" {
-		return operator.Account{}, errors.New("operator account file is absent: bootstrap login, display name and password hash are required")
+		return operator.State{}, errors.New("operator account file is absent: bootstrap login, display name and password hash are required")
 	}
 	profileID, err := opts.NewProfileID()
 	if err != nil {
-		return operator.Account{}, fmt.Errorf("operator profile ID: %w", err)
+		return operator.State{}, fmt.Errorf("operator profile ID: %w", err)
 	}
-	account := operator.Account{
+	state := operator.State{Account: operator.Account{
 		ProfileID: profileID, Login: bootstrap.Login, DisplayName: bootstrap.DisplayName,
 		PasswordHash: bootstrap.PasswordHash, CredentialVersion: 1,
+	}}
+	if err := opts.Validate(state); err != nil {
+		return operator.State{}, fmt.Errorf("operator bootstrap: %w", err)
 	}
-	if err := opts.Validate(account); err != nil {
-		return operator.Account{}, fmt.Errorf("operator bootstrap: %w", err)
+	if err := s.commit(state); err != nil {
+		return operator.State{}, fmt.Errorf("create operator account file: %w", err)
 	}
-	data, err := encode(account)
-	if err != nil {
-		return operator.Account{}, err
-	}
-	if err := s.write(data); err != nil {
-		return operator.Account{}, fmt.Errorf("create operator account file: %w", err)
-	}
-	s.current = data
-	return account, nil
+	return state, nil
 }
 
-func encode(account operator.Account) ([]byte, error) {
+// encode writes the current schema; times are stored in UTC.
+func encode(state operator.State) ([]byte, error) {
+	sessions := make([]sessionDocument, 0, len(state.Sessions))
+	for _, st := range state.Sessions {
+		sessions = append(sessions, sessionDocument{
+			Digest: st.Digest, RememberMe: st.RememberMe, CredentialVersion: st.CredentialVersion,
+			CreatedAt: st.Created.UTC(), LastSeenAt: st.LastSeen.UTC(), ExpiresAt: st.ExpiresAt.UTC(),
+		})
+	}
+	a := state.Account
 	data, err := json.MarshalIndent(document{
-		SchemaVersion: schemaVersion, ProfileID: account.ProfileID, Login: account.Login,
-		DisplayName: account.DisplayName, PasswordHash: account.PasswordHash, CredentialVersion: account.CredentialVersion,
+		SchemaVersion: schemaVersion, ProfileID: a.ProfileID, Login: a.Login, DisplayName: a.DisplayName,
+		PasswordHash: a.PasswordHash, CredentialVersion: a.CredentialVersion, Sessions: sessions,
 	}, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode account: %w", operator.ErrStorageUnavailable, err)
@@ -131,45 +168,103 @@ func encode(account operator.Account) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// decode accepts exactly one object with known, unique, exactly spelled fields. Invalid UTF-8 and
-// unpaired surrogate escapes, which JSON would silently turn into U+FFFD, reject the file.
-func decode(data []byte) (operator.Account, error) {
-	if strictjson.CheckText(data) != nil || rejectUnexpectedKeys(data) != nil {
-		return operator.Account{}, errInvalidFile
+// decode accepts exactly one object of a known schema with exactly spelled, unique fields, and exactly
+// spelled session records. Invalid UTF-8 and unpaired surrogate escapes, which JSON would silently turn
+// into U+FFFD, reject the file.
+func decode(data []byte) (operator.State, int, error) {
+	if strictjson.CheckText(data) != nil {
+		return operator.State{}, 0, errInvalidFile
+	}
+	fields, err := objectFields(data)
+	if err != nil {
+		return operator.State{}, 0, err
+	}
+	var version int
+	if err := json.Unmarshal(fields["schemaVersion"], &version); err != nil {
+		return operator.State{}, 0, errInvalidFile
+	}
+	keys, known := schemaKeys[version]
+	if !known {
+		return operator.State{}, 0, errors.New("operator account file: unsupported schemaVersion")
+	}
+	if !sameKeys(fields, keys) || version == schemaVersion && checkSessionKeys(fields["sessions"]) != nil {
+		return operator.State{}, 0, errInvalidFile
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var doc document
 	if err := decoder.Decode(&doc); err != nil {
-		return operator.Account{}, errInvalidFile
+		return operator.State{}, 0, errInvalidFile
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return operator.Account{}, errInvalidFile
-	}
-	if doc.SchemaVersion != schemaVersion {
-		return operator.Account{}, errors.New("operator account file: unsupported schemaVersion")
-	}
-	return operator.Account{
+	state := operator.State{Account: operator.Account{
 		ProfileID: doc.ProfileID, Login: doc.Login, DisplayName: doc.DisplayName,
 		PasswordHash: doc.PasswordHash, CredentialVersion: doc.CredentialVersion,
-	}, nil
+	}}
+	for _, st := range doc.Sessions {
+		state.Sessions = append(state.Sessions, operator.StoredSession{
+			Digest: st.Digest, RememberMe: st.RememberMe, CredentialVersion: st.CredentialVersion,
+			Created: st.CreatedAt, LastSeen: st.LastSeenAt, ExpiresAt: st.ExpiresAt,
+		})
+	}
+	return state, version, nil
 }
 
-func rejectUnexpectedKeys(data []byte) error {
+// objectFields reads exactly one JSON object and returns its members. Duplicate keys and data after the
+// object are rejected.
+func objectFields(data []byte) (map[string]json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
-		return errInvalidFile
+		return nil, errInvalidFile
 	}
-	seen := make(map[string]bool)
+	fields := make(map[string]json.RawMessage)
 	for decoder.More() {
 		token, err := decoder.Token()
 		key, isKey := token.(string)
-		if err != nil || !isKey || !knownKeys[key] || seen[key] {
-			return errInvalidFile
+		if err != nil || !isKey {
+			return nil, errInvalidFile
 		}
-		seen[key] = true
+		if _, duplicate := fields[key]; duplicate {
+			return nil, errInvalidFile
+		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
+			return nil, errInvalidFile
+		}
+		fields[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, errInvalidFile
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errInvalidFile
+	}
+	return fields, nil
+}
+
+func sameKeys(fields map[string]json.RawMessage, want map[string]bool) bool {
+	if len(fields) != len(want) {
+		return false
+	}
+	for key := range fields {
+		if !want[key] {
+			return false
+		}
+	}
+	return true
+}
+
+// checkSessionKeys requires a list of objects, each with exactly the session record keys.
+func checkSessionKeys(raw json.RawMessage) error {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '[' {
+		return errInvalidFile
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return errInvalidFile
+	}
+	for _, item := range items {
+		fields, err := objectFields(item)
+		if err != nil || !sameKeys(fields, sessionKeys) {
 			return errInvalidFile
 		}
 	}
@@ -178,9 +273,13 @@ func rejectUnexpectedKeys(data []byte) error {
 
 // Replace commits next as the whole account file. A failure known to precede the commit wraps
 // operator.ErrStorageUnavailable; any failure after the commit point wraps operator.ErrUpdateOutcomeUnknown.
-func (s *Store) Replace(next operator.Account) error {
+func (s *Store) Replace(next operator.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.commit(next)
+}
+
+func (s *Store) commit(next operator.State) error {
 	data, err := encode(next)
 	if err != nil {
 		return err

@@ -52,13 +52,13 @@ type fakeStore struct {
 	saved []operator.Account
 }
 
-func (s *fakeStore) Replace(next operator.Account) error {
+func (s *fakeStore) Replace(next operator.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
-	s.saved = append(s.saved, next)
+	s.saved = append(s.saved, next.Account)
 	return nil
 }
 

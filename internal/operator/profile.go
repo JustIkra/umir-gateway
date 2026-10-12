@@ -118,7 +118,7 @@ func (s *Service) hash(ctx context.Context, password string) (string, error) {
 // commitLocked persists next while s.mu is held. A definite storage failure leaves everything unchanged;
 // any other failure enters fail-closed recovery until a restart reloads the authoritative file.
 func (s *Service) commitLocked(next Account) error {
-	err := s.opts.Store.Replace(next)
+	err := s.opts.Store.Replace(State{Account: next})
 	switch {
 	case err == nil:
 		s.account = next

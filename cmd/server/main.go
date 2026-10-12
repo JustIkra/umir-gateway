@@ -34,21 +34,21 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	account, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{
+	state, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{
 		Login: cfg.BootstrapLogin, DisplayName: cfg.BootstrapDisplayName, PasswordHash: cfg.BootstrapPasswordHash,
 	}, accountfile.Options{
 		NewProfileID: newToken,
-		Validate: func(account operator.Account) error {
-			if err := operator.ValidateAccount(account); err != nil {
+		Validate: func(state operator.State) error {
+			if err := operator.ValidateState(state); err != nil {
 				return err
 			}
-			return hasher.Check(account.PasswordHash)
+			return hasher.Check(state.Account.PasswordHash)
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("operator account: %w", err)
 	}
-	return operator.NewService(account, operator.Options{
+	return operator.NewService(state.Account, operator.Options{
 		Store: store, Hasher: hasher, Now: time.Now, NewToken: newToken,
 		IdleTimeout: cfg.IdleTimeout, AbsoluteTimeout: cfg.AbsoluteTimeout,
 		MaxSessions: operator.DefaultMaxSessions, MaxAnonymous: operator.DefaultMaxAnonymous,
