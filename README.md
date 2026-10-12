@@ -190,7 +190,7 @@ TZ=Europe/Moscow PORT=18081 SERVING_URL=http://127.0.0.1:18082 WAREHOUSE_URL=htt
   OPERATOR_BOOTSTRAP_DISPLAY_NAME=Оператор OPERATOR_BOOTSTRAP_PASSWORD_HASH="$HASH" go run ./cmd/server
 ```
 
-Процесс слушает `PORT` на всех интерфейсах: при прямом запуске закройте порт от внешней сети, отдельной настройки адреса пока нет.
+Запущенный так процесс слушает только `127.0.0.1`. Образ задаёт `LISTEN_HOST=0.0.0.0`: в Compose frontend обращается к gateway по сети контейнеров, а порт gateway на хост не публикуется.
 
 Сборка отдельного контейнера: скопируйте `.env.example` в `.env`, заполните учётную запись для первого запуска и выполните
 
@@ -202,6 +202,7 @@ docker compose up --build -d --wait
 | Настройка | Значение по умолчанию |
 | --- | --- |
 | `PORT` | `8080` |
+| `LISTEN_HOST` | `127.0.0.1`; в образе `0.0.0.0`. Допустимы только loopback-адрес или `0.0.0.0` / `::`: проверка `/server healthcheck` обращается к `127.0.0.1`. |
 | `SERVING_URL` | `http://serving:8080` |
 | `WAREHOUSE_URL` | `http://warehouse:8080` |
 | `UPSTREAM_TIMEOUT` | `15s`; общий бюджет на приём тела запроса от клиента и обмен с upstream, формат Go duration |

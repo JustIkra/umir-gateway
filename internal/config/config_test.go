@@ -27,8 +27,8 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Port != "8080" {
-		t.Errorf("port: %q", cfg.Port)
+	if cfg.Port != "8080" || cfg.ListenHost != "127.0.0.1" {
+		t.Errorf("port: %q, listen host: %q", cfg.Port, cfg.ListenHost)
 	}
 	if got := cfg.ServingURL.String(); got != "http://serving:8080" {
 		t.Errorf("serving: %s", got)
@@ -51,6 +51,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestLoadReadsEnvironment(t *testing.T) {
 	cfg, err := Load(env(withOperator(map[string]string{
 		"PORT":                             "18081",
+		"LISTEN_HOST":                      "0.0.0.0",
 		"SERVING_URL":                      "http://127.0.0.1:18082",
 		"WAREHOUSE_URL":                    "https://warehouse.internal:8443/base",
 		"UPSTREAM_TIMEOUT":                 "2500ms",
@@ -65,7 +66,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Port != "18081" || cfg.ServingURL.Host != "127.0.0.1:18082" ||
+	if cfg.Port != "18081" || cfg.ListenHost != "0.0.0.0" || cfg.ServingURL.Host != "127.0.0.1:18082" ||
 		cfg.WarehouseURL.String() != "https://warehouse.internal:8443/base" ||
 		cfg.UpstreamTimeout != 2500*time.Millisecond {
 		t.Fatalf("config: %+v", cfg)
@@ -100,6 +101,9 @@ func TestLoadRejectsInvalidSettings(t *testing.T) {
 		{"PORT", "http"},
 		{"PORT", "0"},
 		{"PORT", "65536"},
+		{"LISTEN_HOST", "example.com"},
+		{"LISTEN_HOST", "10.77.42.240"},
+		{"LISTEN_HOST", "127.0.0.1:80"},
 		{"UPSTREAM_TIMEOUT", "15"},
 		{"UPSTREAM_TIMEOUT", "0s"},
 		{"UPSTREAM_TIMEOUT", "-1s"},

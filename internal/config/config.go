@@ -14,7 +14,9 @@ import (
 )
 
 type Config struct {
-	Port            string
+	Port string
+	// ListenHost is the IP address the server binds: loopback by default, 0.0.0.0 or :: in a container.
+	ListenHost      string
 	ServingURL      *url.URL
 	WarehouseURL    *url.URL
 	UpstreamTimeout time.Duration
@@ -55,6 +57,11 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg.Port = value("PORT", "8080")
 	if n, convErr := strconv.Atoi(cfg.Port); convErr != nil || n < 1 || n > 65535 {
 		return Config{}, fmt.Errorf("PORT: expected TCP port number")
+	}
+	// The healthcheck dials 127.0.0.1, so only loopback or all interfaces are accepted.
+	cfg.ListenHost = value("LISTEN_HOST", "127.0.0.1")
+	if ip := net.ParseIP(cfg.ListenHost); ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+		return Config{}, errors.New("LISTEN_HOST: expected a loopback address, or 0.0.0.0 or :: for all interfaces in a container")
 	}
 	if cfg.ServingURL, err = upstreamURL("SERVING_URL", value("SERVING_URL", "http://serving:8080")); err != nil {
 		return Config{}, err

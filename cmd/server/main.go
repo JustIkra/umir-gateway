@@ -123,6 +123,9 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 
 const shutdownGrace = 10 * time.Second
 
+// listenAddress binds LISTEN_HOST: loopback for a process started by hand, all interfaces in the image.
+func listenAddress(cfg config.Config) string { return net.JoinHostPort(cfg.ListenHost, cfg.Port) }
+
 func run(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
@@ -186,7 +189,7 @@ func main() {
 		log.Fatal(err)
 	}
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              listenAddress(cfg),
 		Handler:           app,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

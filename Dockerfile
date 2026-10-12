@@ -16,7 +16,8 @@ WORKDIR /app
 COPY --link --from=build /out/server /server
 COPY --link --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --link --from=build --chown=65532:65532 --chmod=0700 /out/data /data
-ENV TZ=Europe/Moscow PORT=8080 OPERATOR_STORE_PATH=/data/operator/account.json
+# In a container the frontend reaches the gateway over the Compose network; the host publishes no gateway port.
+ENV TZ=Europe/Moscow PORT=8080 LISTEN_HOST=0.0.0.0 OPERATOR_STORE_PATH=/data/operator/account.json
 LABEL org.opencontainers.image.source="https://github.com/JustIkra/umir-gateway"
 USER 65532:65532
 EXPOSE 8080
