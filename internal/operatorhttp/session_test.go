@@ -304,3 +304,42 @@ func TestRecoveryAllowsOnlyAnonymousCSRFAndLogout(t *testing.T) {
 		t.Errorf("logout during recovery: %d %s", logout.Code, logout.Body)
 	}
 }
+
+func TestRememberMeKeepsTheCookieUntilTheAbsoluteDeadline(t *testing.T) {
+	f := loopbackFixture(t)
+	for _, tc := range []struct {
+		name, extra string
+		persistent  bool
+	}{
+		{"remember me", `,"rememberMe":true`, true},
+		{"explicitly not", `,"rememberMe":false`, false},
+		{"field absent", ``, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preauth, token := f.anonymous()
+			w := f.do(call{
+				method: http.MethodPost, path: "/api/operator/session",
+				body:    `{"login":"operator","password":"` + testPassword + `"` + tc.extra + `}`,
+				cookies: []*http.Cookie{preauth}, csrf: token, origin: testOrigin,
+			})
+			session := cookiesOf(t, w)["umir_operator_session"]
+			if w.Code != http.StatusOK || session == nil {
+				t.Fatalf("login: %d %s", w.Code, w.Body)
+			}
+			// The server deadlines do not change; only the browser keeps the cookie across restarts.
+			if persistent := !session.Expires.IsZero(); persistent != tc.persistent ||
+				tc.persistent && !session.Expires.Equal(f.clock.Now().Add(operator.DefaultAbsoluteTimeout)) {
+				t.Errorf("Expires = %v, want persistent %v", session.Expires, tc.persistent)
+			}
+			if session.MaxAge != 0 {
+				t.Errorf("Max-Age = %d", session.MaxAge)
+			}
+		})
+	}
+	preauth, token := f.anonymous()
+	wantProblem(t, f.do(call{
+		method: http.MethodPost, path: "/api/operator/session",
+		body:    `{"login":"operator","password":"` + testPassword + `","rememberMe":"yes"}`,
+		cookies: []*http.Cookie{preauth}, csrf: token, origin: testOrigin,
+	}), http.StatusBadRequest, "InvalidRequest")
+}

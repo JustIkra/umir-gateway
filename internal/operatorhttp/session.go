@@ -2,6 +2,7 @@ package operatorhttp
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
 )
@@ -20,7 +21,7 @@ func (a *API) csrf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if id != previous {
-		a.setCookie(w, a.cookies.preauth, id)
+		a.setCookie(w, a.cookies.preauth, id, time.Time{})
 	}
 	a.writeJSON(w, r, http.StatusOK, csrfView{CSRFToken: token})
 }
@@ -37,6 +38,8 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Login    *string `json:"login"`
 		Password *string `json:"password"`
+		// RememberMe keeps the session cookie across browser restarts until the absolute deadline.
+		RememberMe bool `json:"rememberMe"`
 	}
 	if !a.decode(w, r, &body) {
 		return
@@ -54,7 +57,11 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		a.accounts.DiscardAnonymous(preauthID)
 		a.clearCookie(w, a.cookies.preauth)
 	}
-	a.setCookie(w, a.cookies.session, session.ID)
+	var expires time.Time
+	if body.RememberMe {
+		expires = session.AbsoluteExpiresAt
+	}
+	a.setCookie(w, a.cookies.session, session.ID, expires)
 	a.writeJSON(w, r, http.StatusOK, accountOf(profile, &session))
 }
 
