@@ -28,8 +28,6 @@ type session struct {
 	lastSeen          time.Time
 	// expires is the absolute deadline fixed at login.
 	expires time.Time
-	// wrongCurrent counts wrong current passwords in password changes made with this session.
-	wrongCurrent int
 }
 
 // sessionDigest identifies a session in memory and in the store.

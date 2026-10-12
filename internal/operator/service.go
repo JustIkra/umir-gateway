@@ -49,7 +49,8 @@ type Options struct {
 	// MaxVerifications bounds concurrent Argon2id work; MaxQueuedLogins bounds logins waiting for it.
 	MaxVerifications int
 	MaxQueuedLogins  int
-	// FailureLimit failed logins within FailureWindow start a Cooldown for every login.
+	// FailureLimit failed logins within FailureWindow start a Cooldown for every login, and as many wrong
+	// current passwords start one for every password change.
 	FailureLimit  int
 	FailureWindow time.Duration
 	Cooldown      time.Duration
@@ -86,7 +87,9 @@ type Service struct {
 	// activity of business requests is stored with the next commit.
 	sessions  map[string]*session
 	anonymous map[string]*anonymousContext
-	throttle  loginThrottle
+	// throttle limits failed logins; changeThrottle limits wrong current passwords in password changes.
+	throttle       failureThrottle
+	changeThrottle failureThrottle
 }
 
 // NewService starts from the persisted state. Stored sessions that expired or belong to an older
@@ -107,13 +110,14 @@ func NewService(state State, opts Options) (*Service, error) {
 		return nil, fmt.Errorf("account passwordHash: %w", err)
 	}
 	s := &Service{
-		opts:      opts,
-		changing:  make(chan struct{}, 1),
-		account:   state.Account,
-		sessions:  make(map[string]*session),
-		anonymous: make(map[string]*anonymousContext),
-		gate:      newVerificationGate(opts.MaxVerifications, opts.MaxQueuedLogins),
-		throttle:  loginThrottle{failures: make([]time.Time, 0, opts.FailureLimit)},
+		opts:           opts,
+		changing:       make(chan struct{}, 1),
+		account:        state.Account,
+		sessions:       make(map[string]*session),
+		anonymous:      make(map[string]*anonymousContext),
+		gate:           newVerificationGate(opts.MaxVerifications, opts.MaxQueuedLogins),
+		throttle:       failureThrottle{failures: make([]time.Time, 0, opts.FailureLimit)},
+		changeThrottle: failureThrottle{failures: make([]time.Time, 0, opts.FailureLimit)},
 	}
 	s.restore(state.Sessions)
 	return s, nil

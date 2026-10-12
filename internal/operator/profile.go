@@ -35,8 +35,9 @@ func (s *Service) UpdateDisplayName(id, raw string) (Profile, error) {
 
 // ChangePassword replaces the password and revokes every session, including id. Verification and
 // hashing run outside the mutex; the commit rechecks that the session and credentials did not change.
-// Changes run one at a time, so parallel requests cannot hold verification slots or the login queue,
-// and FailureLimit wrong current passwords revoke the session, sending a guesser back to login.
+// Changes run one at a time, so parallel requests cannot hold verification slots or the login queue.
+// FailureLimit wrong current passwords within FailureWindow, across all sessions, start a Cooldown in
+// which every change is refused before any password check; the change that starts it revokes id.
 func (s *Service) ChangePassword(ctx context.Context, id, current, next string) error {
 	select {
 	case s.changing <- struct{}{}:
@@ -51,6 +52,11 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	if err != nil {
 		s.mu.Unlock()
 		return err
+	}
+	// During the cooldown a change is refused before any password check and revokes nothing.
+	if wait := s.changeThrottle.wait(now); wait > 0 {
+		s.mu.Unlock()
+		return &PasswordChangeLimitError{RetryAfter: wholeSeconds(wait)}
 	}
 	st.lastSeen = now
 	snapshot := s.account
@@ -88,26 +94,27 @@ func (s *Service) ChangePassword(ctx context.Context, id, current, next string) 
 	return s.commitLocked(updated, map[string]*session{}, accountChange)
 }
 
-// recordWrongCurrent counts a wrong current password and returns ErrCurrentPasswordIncorrect. At
-// FailureLimit the session is revoked, and the revocation is stored before the caller is told.
+// recordWrongCurrent counts a wrong current password for the whole operator and returns
+// ErrCurrentPasswordIncorrect. The FailureLimit-th within FailureWindow starts a Cooldown for every
+// password change and revokes the calling session; the revocation is stored before it is reported.
 func (s *Service) recordWrongCurrent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	digest := sessionDigest(id)
-	st, ok := s.sessions[digest]
-	if !ok {
+	if !s.changeThrottle.fail(s.opts.Now(), s.opts.FailureLimit, s.opts.FailureWindow, s.opts.Cooldown) {
 		return ErrCurrentPasswordIncorrect
 	}
-	st.wrongCurrent++
-	if st.wrongCurrent < s.opts.FailureLimit {
-		return ErrCurrentPasswordIncorrect
+	limited := &PasswordChangeLimitError{RetryAfter: wholeSeconds(s.opts.Cooldown)}
+	digest := sessionDigest(id)
+	if _, ok := s.sessions[digest]; !ok {
+		return limited
 	}
 	next := maps.Clone(s.sessions)
 	delete(next, digest)
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
 		return err
 	}
-	return ErrCurrentPasswordIncorrect
+	limited.SessionRevoked = true
+	return limited
 }
 
 // hash creates the verifier for a new password inside a verification slot.

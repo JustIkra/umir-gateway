@@ -17,7 +17,11 @@ const (
 	queueFullRetryAfter     = time.Second
 )
 
-var ErrLoginRateLimited = errors.New("login rate limited")
+var (
+	ErrLoginRateLimited = errors.New("login rate limited")
+	// ErrPasswordChangeRateLimited is wrapped by PasswordChangeLimitError.
+	ErrPasswordChangeRateLimited = errors.New("password change rate limited")
+)
 
 // RateLimitError rejects a login before any password check.
 type RateLimitError struct {
@@ -30,7 +34,25 @@ func (e *RateLimitError) Error() string { return ErrLoginRateLimited.Error() }
 func (e *RateLimitError) Unwrap() error { return ErrLoginRateLimited }
 
 func rateLimited(wait time.Duration) *RateLimitError {
-	return &RateLimitError{RetryAfter: max(time.Second, (wait+time.Second-1)/time.Second*time.Second)}
+	return &RateLimitError{RetryAfter: wholeSeconds(wait)}
+}
+
+// PasswordChangeLimitError refuses a password change during the operator-wide cooldown that
+// FailureLimit wrong current passwords within FailureWindow start. SessionRevoked reports that this
+// response revoked, and stored the revocation of, the calling session.
+type PasswordChangeLimitError struct {
+	// RetryAfter is a whole number of seconds, at least one.
+	RetryAfter     time.Duration
+	SessionRevoked bool
+}
+
+func (e *PasswordChangeLimitError) Error() string { return ErrPasswordChangeRateLimited.Error() }
+
+func (e *PasswordChangeLimitError) Unwrap() error { return ErrPasswordChangeRateLimited }
+
+// wholeSeconds rounds wait up to whole seconds, at least one, for Retry-After.
+func wholeSeconds(wait time.Duration) time.Duration {
+	return max(time.Second, (wait+time.Second-1)/time.Second*time.Second)
 }
 
 // verificationGate bounds Argon2id work. Holders release their slot when the check ends; waiters
@@ -82,33 +104,42 @@ func (g *verificationGate) acquire(ctx context.Context, bounded bool) (release f
 
 func (g *verificationGate) release() { <-g.slots }
 
-// loginThrottle is the single failed-login counter; it never grows past FailureLimit entries.
-type loginThrottle struct {
+// failureThrottle counts failures in a rolling window and starts a cooldown at the limit. It never
+// grows past the limit; the login and the password change each have one for the whole operator.
+type failureThrottle struct {
 	failures []time.Time
 	until    time.Time
 }
 
-func (s *Service) cooldownLocked(now time.Time) time.Duration {
-	if now.Before(s.throttle.until) {
-		return s.throttle.until.Sub(now)
+func (t *failureThrottle) wait(now time.Time) time.Duration {
+	if now.Before(t.until) {
+		return t.until.Sub(now)
 	}
 	return 0
 }
 
-func (s *Service) recordFailure() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.opts.Now()
-	kept := s.throttle.failures[:0]
-	for _, at := range s.throttle.failures {
-		if now.Sub(at) < s.opts.FailureWindow {
+// fail records a failure at now and reports whether it started a cooldown.
+func (t *failureThrottle) fail(now time.Time, limit int, window, cooldown time.Duration) bool {
+	kept := t.failures[:0]
+	for _, at := range t.failures {
+		if now.Sub(at) < window {
 			kept = append(kept, at)
 		}
 	}
 	kept = append(kept, now)
-	if len(kept) >= s.opts.FailureLimit {
-		s.throttle.until = now.Add(s.opts.Cooldown)
-		kept = kept[:0]
+	if len(kept) >= limit {
+		t.until = now.Add(cooldown)
+		t.failures = kept[:0]
+		return true
 	}
-	s.throttle.failures = kept
+	t.failures = kept
+	return false
+}
+
+func (s *Service) cooldownLocked(now time.Time) time.Duration { return s.throttle.wait(now) }
+
+func (s *Service) recordFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.throttle.fail(s.opts.Now(), s.opts.FailureLimit, s.opts.FailureWindow, s.opts.Cooldown)
 }

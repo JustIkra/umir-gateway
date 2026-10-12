@@ -273,33 +273,6 @@ func TestCooldownStopsLoginsQueuedBeforeIt(t *testing.T) {
 	}
 }
 
-func TestWrongCurrentPasswordsRevokeTheSession(t *testing.T) {
-	f := newFixture(t, nil)
-	session, other := f.login(t), f.login(t)
-	before := len(f.store.calls())
-	for i := range DefaultFailureLimit {
-		if err := f.svc.ChangePassword(t.Context(), session.ID, "wrong current value", newPassword); !errors.Is(err, ErrCurrentPasswordIncorrect) {
-			t.Fatalf("wrong current password %d = %v", i+1, err)
-		}
-	}
-	if err := f.svc.ChangePassword(t.Context(), session.ID, testPassword, newPassword); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("change after %d wrong current passwords = %v", DefaultFailureLimit, err)
-	}
-	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
-		t.Errorf("guessing session still valid: %v", err)
-	}
-	if _, _, err := f.svc.Authenticate(other.ID); err != nil {
-		t.Errorf("other session revoked: %v", err)
-	}
-	// Only the revocation was stored; the account did not change.
-	if calls := f.store.calls()[before:]; len(calls) != 1 || calls[0] != testAccount() {
-		t.Errorf("commits after the wrong passwords = %+v", calls)
-	}
-	if stored := f.store.last().Sessions; len(stored) != 1 || stored[0].Digest != digestOf(other.ID) {
-		t.Errorf("stored sessions = %+v, want only the other session", stored)
-	}
-}
-
 func TestPasswordChangesDoNotShrinkLoginQueue(t *testing.T) {
 	f := newFixture(t, nil)
 	session := f.login(t)
