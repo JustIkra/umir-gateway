@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -80,5 +81,123 @@ func TestFeedbackTimeoutAfterDispatchIsAnUnknownOutcome(t *testing.T) {
 	var body map[string]string
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusGatewayTimeout || body["outcome"] != "unknown" {
 		t.Fatalf("response: %d %s", response.Code, response.Body)
+	}
+}
+
+func TestFeedbackTimeoutKeepsClientConnectionUsable(t *testing.T) {
+	var calls atomic.Int32
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			t.Errorf("read body: %v", err)
+			return
+		}
+		if calls.Add(1) == 1 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer service.Close()
+	values := operatorEnv(t)
+	values["FEEDBACK_URL"], values["UPSTREAM_TIMEOUT"] = service.URL, (100 * time.Millisecond).String()
+	front := httptest.NewServer(gatewayWith(t, values))
+	defer front.Close()
+	client := front.Client()
+	do := func(request *http.Request) *http.Response {
+		t.Helper()
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := response.Body.Close(); err != nil {
+				t.Errorf("close response body: %v", err)
+			}
+		})
+		return response
+	}
+	bootstrap, err := http.NewRequest(http.MethodGet, front.URL+"/api/operator/csrf", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := do(bootstrap)
+	var body struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	if err := json.NewDecoder(csrf.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	// The second post reuses the keep-alive connection of the timed out one.
+	for i, want := range []int{http.StatusGatewayTimeout, http.StatusCreated} {
+		post, err := http.NewRequest(http.MethodPost, front.URL+"/api/feedback", strings.NewReader(`{"submissionID":"s-1"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		post.Header.Set("Content-Type", "application/json")
+		post.Header.Set("Origin", testOrigin)
+		post.Header.Set("X-CSRF-Token", body.CSRFToken)
+		for _, cookie := range csrf.Cookies() {
+			post.AddCookie(cookie)
+		}
+		response := do(post)
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
+			t.Errorf("read response body: %v", err)
+		}
+		if response.StatusCode != want {
+			t.Fatalf("post %d: %d, want %d", i+1, response.StatusCode, want)
+		}
+	}
+}
+
+func TestFeedbackBodyIsReadWithinTheExchangeBudget(t *testing.T) {
+	var calls atomic.Int32
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer service.Close()
+	values := operatorEnv(t)
+	values["FEEDBACK_URL"], values["UPSTREAM_TIMEOUT"] = service.URL, (100 * time.Millisecond).String()
+	front := httptest.NewServer(gatewayWith(t, values))
+	defer front.Close()
+	bootstrap, err := front.Client().Get(front.URL + "/api/operator/csrf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		CSRFToken string `json:"csrfToken"`
+	}
+	err = json.NewDecoder(bootstrap.Body).Decode(&body)
+	if closeErr := bootstrap.Body.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	// The client sends the rest of the body after the exchange budget has run out.
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(writer, `{"submissionID":`)
+		time.Sleep(300 * time.Millisecond)
+		_, _ = io.WriteString(writer, `"s-1"}`)
+		_ = writer.Close()
+	}()
+	post, err := http.NewRequest(http.MethodPost, front.URL+"/api/feedback", reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Header.Set("Content-Type", "application/json")
+	post.Header.Set("Origin", testOrigin)
+	post.Header.Set("X-CSRF-Token", body.CSRFToken)
+	for _, cookie := range bootstrap.Cookies() {
+		post.AddCookie(cookie)
+	}
+	response, err := front.Client().Do(post)
+	if err == nil {
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Errorf("slow body: %d, want 400 before dispatch", response.StatusCode)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Error("a body read after the budget reached the service")
 	}
 }

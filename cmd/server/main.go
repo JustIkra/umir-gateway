@@ -65,14 +65,21 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.Logger) (http.Handler, error) {
 	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
-	upstream := func(target *url.URL) (http.Handler, error) {
+	proxy := func(target *url.URL) (http.Handler, error) {
 		proxy, err := httpupstream.NewProxy(target, transport)
 		if err != nil {
 			return nil, err
 		}
 		proxy.ErrorHandler = httpapi.WriteTransportError
 		proxy.ModifyResponse = operatorhttp.DropReservedCookies
-		return operatorhttp.StripCredentials(withDeadline(proxy, cfg.UpstreamTimeout)), nil
+		return operatorhttp.StripCredentials(proxy), nil
+	}
+	upstream := func(target *url.URL) (http.Handler, error) {
+		h, err := proxy(target)
+		if err != nil {
+			return nil, err
+		}
+		return withDeadline(h, cfg.UpstreamTimeout), nil
 	}
 	serving, err := upstream(cfg.ServingURL)
 	if err != nil {
@@ -82,7 +89,9 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 	if err != nil {
 		return nil, fmt.Errorf("warehouse: %w", err)
 	}
-	feedback, err := upstream(cfg.FeedbackURL)
+	// The feedback guard reads the body itself, so the deadline wraps the guard: the body is read under
+	// the exchange budget, and no read deadline is set once the connection is idle again.
+	feedback, err := proxy(cfg.FeedbackURL)
 	if err != nil {
 		return nil, fmt.Errorf("feedback: %w", err)
 	}
@@ -95,7 +104,10 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 	}
 	return httpapi.NewRouter(httpapi.Routes{
 		Serving: serving, Warehouse: warehouse, Operator: api, Protect: api.Protect,
-		Feedback: feedback, GuardFeedback: api.GuardFeedback, NewRequestID: rand.Text,
+		Feedback: feedback, NewRequestID: rand.Text,
+		GuardFeedback: func(next http.Handler) http.Handler {
+			return withDeadline(api.GuardFeedback(next), cfg.UpstreamTimeout)
+		},
 	})
 }
 

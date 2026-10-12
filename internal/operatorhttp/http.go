@@ -104,9 +104,14 @@ func (a *API) readJSON(w http.ResponseWriter, r *http.Request, limit int64) ([]b
 		a.problem(w, r, http.StatusUnsupportedMediaType, "UnsupportedMediaType", "send the body as application/json")
 		return nil, false
 	}
-	// A request without a body has nothing to bound, and the server already reads its connection.
+	// A request without a body has nothing to bound, and the server already reads its connection. An
+	// earlier request deadline, such as the feedback exchange budget, is kept.
 	if r.Body != http.NoBody {
-		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		deadline := time.Now().Add(bodyTimeout)
+		if budget, ok := r.Context().Deadline(); ok && budget.Before(deadline) {
+			deadline = budget
+		}
+		if err := http.NewResponseController(w).SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			a.fail(w, r, fmt.Errorf("body read deadline: %w", err), "")
 			return nil, false
 		}
