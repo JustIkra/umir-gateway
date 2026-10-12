@@ -83,6 +83,7 @@ var fieldMessages = map[string]string{
 func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid string) {
 	var field *operator.FieldError
 	var limited *operator.RateLimitError
+	var changeLimited *operator.PasswordChangeLimitError
 	switch {
 	case errors.As(err, &field) && invalid != "":
 		a.reject(w, r, http.StatusUnprocessableEntity, httpapi.Problem{
@@ -91,6 +92,17 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 	case errors.As(err, &limited):
 		w.Header().Set("Retry-After", strconv.Itoa(int(limited.RetryAfter/time.Second)))
 		a.problem(w, r, http.StatusTooManyRequests, "LoginRateLimited", "too many login attempts")
+	case errors.As(err, &changeLimited):
+		// The revocation is already stored, so the cookie is cleared with the answer that reports it.
+		revoked := changeLimited.SessionRevoked
+		if revoked {
+			a.clearCookie(w, a.cookies.session)
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(int(changeLimited.RetryAfter/time.Second)))
+		a.reject(w, r, http.StatusTooManyRequests, httpapi.Problem{
+			Code: "PasswordChangeRateLimited", Message: "too many wrong current passwords; password changes are paused",
+			SessionRevoked: &revoked,
+		})
 	case errors.Is(err, operator.ErrInvalidCredentials):
 		w.Header().Set("WWW-Authenticate", challenge)
 		a.problem(w, r, http.StatusUnauthorized, "InvalidCredentials", "login or password is incorrect")

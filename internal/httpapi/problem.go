@@ -15,6 +15,8 @@ type Problem struct {
 	Message     string            `json:"message"`
 	FieldErrors map[string]string `json:"fieldErrors,omitempty"`
 	RequestID   string            `json:"requestID"`
+	// SessionRevoked is set only on PasswordChangeRateLimited: whether this response revoked the session.
+	SessionRevoked *bool `json:"sessionRevoked,omitempty"`
 }
 
 type requestIDKey struct{}
