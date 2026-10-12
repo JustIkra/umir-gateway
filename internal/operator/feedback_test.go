@@ -35,7 +35,8 @@ func TestFeedbackAcceptsAnonymousAndSessionTokensWithoutExtendingTheSession(t *t
 	if err := f.svc.AdmitFeedback(session.ID, "", session.CSRFToken); err != nil {
 		t.Fatalf("post with the session token = %v", err)
 	}
-	// A page loaded before the login still holds the anonymous token.
+	// A live anonymous context is accepted alongside the session; over HTTP a login discards the
+	// browser's own anonymous context.
 	if err := f.svc.AdmitFeedback(session.ID, anonymous, anonymousToken); err != nil {
 		t.Fatalf("post with the anonymous token and a session = %v", err)
 	}
