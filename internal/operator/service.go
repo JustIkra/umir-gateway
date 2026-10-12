@@ -53,6 +53,10 @@ type Session struct {
 	CSRFToken string
 	// ExpiresAt is the earlier of the idle and absolute deadlines.
 	ExpiresAt time.Time
+	// IdleExpiresAt moves with every authenticated request but never past AbsoluteExpiresAt, which is fixed
+	// at login. The frontend warns before both and extends only on a user action.
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
 }
 
 type session struct {
@@ -244,11 +248,11 @@ func (s *Service) expired(st *session, now time.Time) bool {
 }
 
 func (s *Service) view(id string, st *session) Session {
-	idle := st.lastSeen.Add(s.opts.IdleTimeout)
-	if absolute := st.created.Add(s.opts.AbsoluteTimeout); absolute.Before(idle) {
+	idle, absolute := st.lastSeen.Add(s.opts.IdleTimeout), st.created.Add(s.opts.AbsoluteTimeout)
+	if absolute.Before(idle) {
 		idle = absolute
 	}
-	return Session{ID: id, CSRFToken: st.csrfToken, ExpiresAt: idle}
+	return Session{ID: id, CSRFToken: st.csrfToken, ExpiresAt: idle, IdleExpiresAt: idle, AbsoluteExpiresAt: absolute}
 }
 
 func (s *Service) newPairLocked() (id, csrf string, err error) {

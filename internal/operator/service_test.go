@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// wantDeadlines checks both deadlines; the idle one never passes the absolute one, so it is also expiresAt.
+func wantDeadlines(t *testing.T, s Session, idle, absolute time.Time) {
+	t.Helper()
+	if !s.IdleExpiresAt.Equal(idle) || !s.AbsoluteExpiresAt.Equal(absolute) || !s.ExpiresAt.Equal(idle) {
+		t.Errorf("deadlines = expires %v, idle %v, absolute %v; want idle %v, absolute %v",
+			s.ExpiresAt, s.IdleExpiresAt, s.AbsoluteExpiresAt, idle, absolute)
+	}
+}
+
 func TestLoginOpensSession(t *testing.T) {
 	f := newFixture(t, nil)
 	profile, session, err := f.svc.Login(t.Context(), "operator", testPassword, "")
@@ -20,9 +29,7 @@ func TestLoginOpensSession(t *testing.T) {
 	if session.ID == "" || session.CSRFToken == "" || session.ID == session.CSRFToken {
 		t.Errorf("session = %+v", session)
 	}
-	if want := f.clock.Now().Add(30 * time.Minute); !session.ExpiresAt.Equal(want) {
-		t.Errorf("expiresAt = %v, want %v", session.ExpiresAt, want)
-	}
+	wantDeadlines(t, session, f.clock.Now().Add(30*time.Minute), f.clock.Now().Add(8*time.Hour))
 	if _, got, err := f.svc.Authenticate(session.ID); err != nil || got.CSRFToken != session.CSRFToken {
 		t.Errorf("Authenticate = %+v, %v", got, err)
 	}
@@ -85,15 +92,15 @@ func TestAuthenticateRejectsUnknownAndRevoked(t *testing.T) {
 
 func TestIdleExpiry(t *testing.T) {
 	f := newFixture(t, nil)
+	start := f.clock.Now()
 	session := f.login(t)
 	f.clock.Advance(29*time.Minute + 59*time.Second)
 	_, refreshed, err := f.svc.Authenticate(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := f.clock.Now().Add(30 * time.Minute); !refreshed.ExpiresAt.Equal(want) {
-		t.Errorf("expiresAt = %v, want %v", refreshed.ExpiresAt, want)
-	}
+	// A request moves only the idle deadline.
+	wantDeadlines(t, refreshed, f.clock.Now().Add(30*time.Minute), start.Add(8*time.Hour))
 	f.clock.Advance(30 * time.Minute)
 	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("after 30 idle minutes: %v", err)
@@ -111,9 +118,11 @@ func TestAbsoluteExpiry(t *testing.T) {
 		}
 	}
 	_, near, err := f.svc.Authenticate(session.ID)
-	if err != nil || !near.ExpiresAt.Equal(start.Add(8*time.Hour)) {
-		t.Fatalf("expiresAt near the absolute deadline = %v, %v", near.ExpiresAt, err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	// Twenty minutes before the absolute deadline a request cannot extend the session past it.
+	wantDeadlines(t, near, start.Add(8*time.Hour), start.Add(8*time.Hour))
 	f.clock.Advance(20 * time.Minute)
 	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("after 8 hours: %v", err)
@@ -126,9 +135,10 @@ func TestClockMovingBackwardsKeepsAbsoluteDeadline(t *testing.T) {
 	session := f.login(t)
 	f.clock.Advance(-time.Hour)
 	_, got, err := f.svc.Authenticate(session.ID)
-	if err != nil || got.ExpiresAt.After(start.Add(8*time.Hour)) {
-		t.Fatalf("expiresAt = %v, %v", got.ExpiresAt, err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	wantDeadlines(t, got, f.clock.Now().Add(30*time.Minute), start.Add(8*time.Hour))
 	f.clock.Advance(9 * time.Hour)
 	if _, _, err := f.svc.Authenticate(session.ID); !errors.Is(err, ErrUnauthenticated) {
 		t.Errorf("past the absolute deadline: %v", err)
