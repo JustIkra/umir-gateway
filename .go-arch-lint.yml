@@ -21,6 +21,7 @@ components:
 vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
+  x-term: {in: "golang.org/x/term"}
 deps:
   config:
     mayDependOn: [config]
@@ -36,6 +37,7 @@ deps:
     mayDependOn: [bootstrap, transport, proxy]
   process:
     mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp]
+    canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport]
   integration:

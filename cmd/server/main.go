@@ -163,6 +163,10 @@ func healthcheck(port string) (result error) {
 }
 
 func main() {
+	// hash-password runs before configuration: it is used to create the bootstrap settings.
+	if len(os.Args) >= 2 && os.Args[1] == "hash-password" {
+		os.Exit(runHashPassword(os.Args[2:]))
+	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		log.Fatal(err)

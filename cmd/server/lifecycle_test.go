@@ -83,6 +83,9 @@ func TestGatewayChildProcess(t *testing.T) {
 	if os.Getenv("UMIR_GATEWAY_TEST_CHILD") != "1" {
 		return
 	}
+	if args := os.Getenv("UMIR_GATEWAY_TEST_ARGS"); args != "" {
+		os.Args = append([]string{os.Args[0]}, strings.Fields(args)...)
+	}
 	main()
 }
 
