@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **BREAKING:** бизнес-маршруты `/api/serving/*` и `/api/warehouse/*`, кроме `GET`/`HEAD` их `/healthz`, требуют сессию оператора; изменяющие методы — ещё точный `Origin` и `X-CSRF-Token`, неподдерживаемые методы получают `405`. Переход: токен из `GET /api/operator/csrf`, вход через `POST /api/operator/session`, затем cookie сессии со всеми запросами и `Origin` с `X-CSRF-Token` с изменяющими. `401` до отправки в upstream означает, что запрос не выполнялся: после входа его повторяют с тем же `commandID`.
+- Личный кабинет оператора (gateway#8): вход, выход, профиль, смена имени и пароля, JSON-файл учётной записи на томе, Argon2id (64 МиБ, t=2, p=1), серверные сессии на 30 минут без активности и не дольше 8 часов, лимиты входа, режим восстановления. Сессия отдаёт `idleExpiresAt` и `absoluteExpiresAt` (gateway#10).
+- Обязательные настройки `OPERATOR_COOKIE_MODE`, `OPERATOR_PUBLIC_ORIGIN`, `OPERATOR_STORE_PATH`; для первого запуска — `OPERATOR_BOOTSTRAP_*`. Команда образа `hash-password` печатает PHC-строку для пароля из stdin, на терминале без эха.
+- Собственные ошибки, кроме транспортных, используют конверт `{code, message, fieldErrors, requestID}`; ошибки полей — коды `Required`, `TooShort`, `TooLong`, `InvalidCharacters` (gateway#10). `POST /healthz` получает `405` в этом конверте.
+- Gateway не передаёт upstream свои cookie и `X-CSRF-Token` и не даёт upstream установить эти cookie.
+- Образ создаёт `/data/operator` (0700, 65532:65532) для тома учётной записи.
+
 - Обновлены закреплённые GitHub Actions до выпусков с поддержкой Node.js 24.
 - Обновлены минимальная версия Go и builder image до 1.26.9 для получения актуальных исправлений безопасности стандартной библиотеки.
 - Preserve the original query string for service validation. Invalid escapes and semicolon parameters no longer disappear before reaching the strict HTTP adapter.
