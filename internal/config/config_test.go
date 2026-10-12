@@ -42,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.UpstreamTimeout != 15*time.Second {
 		t.Errorf("timeout: %s", cfg.UpstreamTimeout)
 	}
+	if cfg.JournalCapacity != 1000 || cfg.ExpirationRunInterval != time.Second {
+		t.Errorf("journal capacity: %d, expiration run interval: %s", cfg.JournalCapacity, cfg.ExpirationRunInterval)
+	}
 	want := Operator{
 		CookieMode: CookieModeLoopback, PublicOrigin: "http://127.0.0.1:8080", StorePath: "/data/operator/account.json",
 		IdleTimeout: 30 * time.Minute, AbsoluteTimeout: 8 * time.Hour,
@@ -59,6 +62,8 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		"WAREHOUSE_URL":                    "https://warehouse.internal:8443/base",
 		"FEEDBACK_URL":                     "http://127.0.0.1:18083",
 		"UPSTREAM_TIMEOUT":                 "2500ms",
+		"JOURNAL_CAPACITY":                 "250",
+		"EXPIRATION_RUN_INTERVAL":          "500ms",
 		"OPERATOR_COOKIE_MODE":             "secure",
 		"OPERATOR_PUBLIC_ORIGIN":           "https://xn----ctbhsteek4c3c.empty-lab.ru",
 		"OPERATOR_BOOTSTRAP_LOGIN":         "operator",
@@ -72,7 +77,7 @@ func TestLoadReadsEnvironment(t *testing.T) {
 	}
 	if cfg.Port != "18081" || cfg.ListenHost != "0.0.0.0" || cfg.ServingURL.Host != "127.0.0.1:18082" ||
 		cfg.WarehouseURL.String() != "https://warehouse.internal:8443/base" || cfg.FeedbackURL.Host != "127.0.0.1:18083" ||
-		cfg.UpstreamTimeout != 2500*time.Millisecond {
+		cfg.UpstreamTimeout != 2500*time.Millisecond || cfg.JournalCapacity != 250 || cfg.ExpirationRunInterval != 500*time.Millisecond {
 		t.Fatalf("config: %+v", cfg)
 	}
 	want := Operator{
@@ -113,6 +118,13 @@ func TestLoadRejectsInvalidSettings(t *testing.T) {
 		{"UPSTREAM_TIMEOUT", "15"},
 		{"UPSTREAM_TIMEOUT", "0s"},
 		{"UPSTREAM_TIMEOUT", "-1s"},
+		{"JOURNAL_CAPACITY", "0"},
+		{"JOURNAL_CAPACITY", "-5"},
+		{"JOURNAL_CAPACITY", "1e3"},
+		{"JOURNAL_CAPACITY", "100001"},
+		{"EXPIRATION_RUN_INTERVAL", "1"},
+		{"EXPIRATION_RUN_INTERVAL", "0s"},
+		{"EXPIRATION_RUN_INTERVAL", "-1s"},
 		{"OPERATOR_COOKIE_MODE", ""},
 		{"OPERATOR_COOKIE_MODE", "insecure"},
 		{"OPERATOR_COOKIE_MODE", "secure"}, // with the loopback http origin

@@ -22,8 +22,15 @@ type Config struct {
 	// FeedbackURL is the private feedback service; the gateway sends it only POST /api/feedback.
 	FeedbackURL     *url.URL
 	UpstreamTimeout time.Duration
-	Operator        Operator
+	// JournalCapacity is how many latest entries the change journal keeps.
+	JournalCapacity int
+	// ExpirationRunInterval paces the expiration runs the gateway starts on the warehouse.
+	ExpirationRunInterval time.Duration
+	Operator              Operator
 }
+
+// maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
+const maxJournalCapacity = 100_000
 
 // Cookie modes of the operator session.
 const (
@@ -77,6 +84,14 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg.UpstreamTimeout, err = time.ParseDuration(value("UPSTREAM_TIMEOUT", "15s"))
 	if err != nil || cfg.UpstreamTimeout <= 0 {
 		return Config{}, fmt.Errorf("UPSTREAM_TIMEOUT: expected positive duration such as 15s")
+	}
+	cfg.JournalCapacity, err = strconv.Atoi(value("JOURNAL_CAPACITY", "1000"))
+	if err != nil || cfg.JournalCapacity < 1 || cfg.JournalCapacity > maxJournalCapacity {
+		return Config{}, fmt.Errorf("JOURNAL_CAPACITY: expected an integer from 1 to %d", maxJournalCapacity)
+	}
+	cfg.ExpirationRunInterval, err = time.ParseDuration(value("EXPIRATION_RUN_INTERVAL", "1s"))
+	if err != nil || cfg.ExpirationRunInterval <= 0 {
+		return Config{}, fmt.Errorf("EXPIRATION_RUN_INTERVAL: expected positive duration such as 1s")
 	}
 	if cfg.Operator, err = loadOperator(getenv, value); err != nil {
 		return Config{}, err
