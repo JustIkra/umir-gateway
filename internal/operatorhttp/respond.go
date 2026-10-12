@@ -61,9 +61,10 @@ func (a *API) problem(w http.ResponseWriter, r *http.Request, status int, code, 
 	a.reject(w, r, status, httpapi.Problem{Code: code, Message: message})
 }
 
-// reject logs the request ID, route and code, never the request itself, and answers with p.
+// reject logs the request ID, route and code, never the request itself, and answers with p. The path is
+// quoted, so a decoded newline in it cannot forge another log line.
 func (a *API) reject(w http.ResponseWriter, r *http.Request, status int, p httpapi.Problem) {
-	a.logger.Printf("operator %s %s %s: %d %s", httpapi.RequestID(r), r.Method, r.URL.Path, status, p.Code)
+	a.logger.Printf("operator %s %s %q: %d %s", httpapi.RequestID(r), r.Method, r.URL.Path, status, p.Code)
 	httpapi.WriteProblem(w, r, status, p)
 }
 
@@ -101,7 +102,7 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 		a.problem(w, r, http.StatusServiceUnavailable, "AccountStorageUnavailable", "account storage failed; nothing was changed")
 	default:
 		// Client cancellation and unexpected failures; the cause goes to the log only.
-		a.logger.Printf("operator %s %s %s: %v", httpapi.RequestID(r), r.Method, r.URL.Path, err)
+		a.logger.Printf("operator %s %s %q: %v", httpapi.RequestID(r), r.Method, r.URL.Path, err)
 		a.problem(w, r, http.StatusServiceUnavailable, "AuthUnavailable", "authentication is temporarily unavailable")
 	}
 }

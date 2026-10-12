@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,6 +175,8 @@ func TestDropReservedCookies(t *testing.T) {
 		"theme=light; Path=/",
 		"__Host-umir_operator_session=forged; Path=/; Secure",
 		"__host-UMIR_operator_preauth=forged",
+		"=umir_operator_session=forged; Path=/", // a browser sends a nameless cookie back as its value
+		"=x",
 		"lang=ru",
 	}}}
 	if err := DropReservedCookies(response); err != nil {
@@ -181,5 +184,17 @@ func TestDropReservedCookies(t *testing.T) {
 	}
 	if got := response.Header.Values("Set-Cookie"); !slices.Equal(got, []string{"theme=light; Path=/", "lang=ru"}) {
 		t.Errorf("Set-Cookie = %q", got)
+	}
+}
+
+func TestLoggedPathCannotForgeLines(t *testing.T) {
+	f := loopbackFixture(t)
+	w := f.send(f.api.Protect(&upstream{t: t}), call{
+		method: http.MethodGet,
+		path:   "/api/serving/menu%0Aoperator%20req-9%20POST%20/api/operator/session:%20200%20LoginOK",
+	})
+	wantProblem(t, w, http.StatusUnauthorized, "Unauthenticated")
+	if logs := f.logs.String(); strings.Count(logs, "\n") != 1 {
+		t.Errorf("one rejection wrote several log lines:\n%s", logs)
 	}
 }

@@ -68,14 +68,15 @@ func StripCredentials(next http.Handler) http.Handler {
 	})
 }
 
-// DropReservedCookies removes upstream Set-Cookie lines that would replace an operator cookie. It fits
-// httputil.ReverseProxy.ModifyResponse.
+// DropReservedCookies removes upstream Set-Cookie lines that would replace an operator cookie. A
+// nameless cookie goes too: browsers send it back as its bare value, which can read as a reserved
+// name=value pair. It fits httputil.ReverseProxy.ModifyResponse.
 func DropReservedCookies(response *http.Response) error {
 	lines := response.Header.Values("Set-Cookie")
 	response.Header.Del("Set-Cookie")
 	for _, line := range lines {
 		name, _, _ := strings.Cut(line, "=")
-		if !reserved[strings.ToLower(strings.TrimSpace(name))] {
+		if name := strings.ToLower(strings.TrimSpace(name)); name != "" && !reserved[name] {
 			response.Header.Add("Set-Cookie", line)
 		}
 	}
