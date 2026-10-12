@@ -81,9 +81,11 @@ type handlerFunc func(*API, http.ResponseWriter, *http.Request)
 
 // routes maps each operator path to its methods; HEAD is served as GET.
 var routes = map[string]map[string]handlerFunc{
-	"/api/operator/csrf":    {http.MethodGet: (*API).csrf},
-	"/api/operator/session": {http.MethodPost: (*API).login, http.MethodDelete: (*API).logout},
-	"/api/operator/me":      {http.MethodGet: (*API).me},
+	"/api/operator/csrf":            {http.MethodGet: (*API).csrf},
+	"/api/operator/session":         {http.MethodPost: (*API).login, http.MethodDelete: (*API).logout},
+	"/api/operator/me":              {http.MethodGet: (*API).me},
+	"/api/operator/me/display-name": {http.MethodPatch: (*API).updateDisplayName},
+	"/api/operator/me/password":     {http.MethodPatch: (*API).changePassword},
 }
 
 // ServeHTTP serves /api/operator/. No response of these routes may be cached.
