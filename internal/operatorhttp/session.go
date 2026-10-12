@@ -99,9 +99,14 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// me returns the profile and session; like every authenticated request, it extends the idle deadline.
+// me returns the profile and session; like every authenticated request, it extends the idle deadline,
+// unless it is a background request.
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	profile, session, err := a.accounts.Current(a.cookie(r, a.cookies.session))
+	current := a.accounts.Current
+	if background(r) {
+		current = a.accounts.Peek
+	}
+	profile, session, err := current(a.cookie(r, a.cookies.session))
 	if err != nil {
 		a.fail(w, r, err, "")
 		return
