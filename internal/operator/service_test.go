@@ -232,3 +232,47 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthorizeRequiresTheSessionCSRFToken(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	other := f.login(t)
+	f.clock.Advance(10 * time.Minute)
+	for _, token := range []string{"", "token-999", session.ID, other.CSRFToken} {
+		if _, _, err := f.svc.Authorize(session.ID, token); !errors.Is(err, ErrInvalidCSRFToken) {
+			t.Errorf("Authorize(%q) = %v", token, err)
+		}
+	}
+	// Rejected tokens did not extend the session: thirty minutes after login it is gone.
+	f.clock.Advance(20 * time.Minute)
+	if _, _, err := f.svc.Authorize(session.ID, session.CSRFToken); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("after 30 minutes without an admitted request: %v", err)
+	}
+}
+
+func TestAuthorizeExtendsTheSession(t *testing.T) {
+	f := newFixture(t, nil)
+	start := f.clock.Now()
+	session := f.login(t)
+	f.clock.Advance(20 * time.Minute)
+	profile, got, err := f.svc.Authorize(session.ID, session.CSRFToken)
+	if err != nil || profile.Login != "operator" {
+		t.Fatalf("Authorize = %+v, %v", profile, err)
+	}
+	wantDeadlines(t, got, f.clock.Now().Add(30*time.Minute), start.Add(8*time.Hour))
+	if _, _, err := f.svc.Authorize("unknown", session.CSRFToken); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("unknown session: %v", err)
+	}
+}
+
+func TestAuthorizeDuringRecovery(t *testing.T) {
+	f := newFixture(t, nil)
+	session := f.login(t)
+	f.store.setErr(errors.New("disk vanished"))
+	if _, err := f.svc.UpdateDisplayName(session.ID, "Смена"); !errors.Is(err, ErrUpdateOutcomeUnknown) {
+		t.Fatalf("UpdateDisplayName = %v", err)
+	}
+	if _, _, err := f.svc.Authorize(session.ID, session.CSRFToken); !errors.Is(err, ErrAuthUnavailable) {
+		t.Errorf("Authorize during recovery = %v", err)
+	}
+}

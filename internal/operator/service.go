@@ -25,6 +25,8 @@ var (
 	ErrUnauthenticated    = errors.New("unauthenticated")
 	// ErrAuthUnavailable is returned in fail-closed recovery after an account update with unknown outcome.
 	ErrAuthUnavailable = errors.New("authentication unavailable")
+	// ErrInvalidCSRFToken rejects an unsafe request whose token does not belong to its session.
+	ErrInvalidCSRFToken = errors.New("invalid CSRF token")
 )
 
 type Options struct {
@@ -175,6 +177,23 @@ func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	st, err := s.activeLocked(id, now)
 	if err != nil {
 		return Profile{}, Session{}, err
+	}
+	st.lastSeen = now
+	return s.account.Profile(), s.view(id, st), nil
+}
+
+// Authorize admits an unsafe request of session id, which must carry the session's CSRF token.
+// A wrong token neither extends nor revokes the session.
+func (s *Service) Authorize(id, csrfToken string) (Profile, Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.opts.Now()
+	st, err := s.activeLocked(id, now)
+	if err != nil {
+		return Profile{}, Session{}, err
+	}
+	if !MatchToken(st.csrfToken, csrfToken) {
+		return Profile{}, Session{}, ErrInvalidCSRFToken
 	}
 	st.lastSeen = now
 	return s.account.Profile(), s.view(id, st), nil
