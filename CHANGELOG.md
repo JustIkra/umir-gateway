@@ -8,6 +8,7 @@
 - Обязательные настройки `OPERATOR_COOKIE_MODE`, `OPERATOR_PUBLIC_ORIGIN`, `OPERATOR_STORE_PATH`; для первого запуска — `OPERATOR_BOOTSTRAP_*`. Команда образа `hash-password` печатает PHC-строку для пароля из stdin, на терминале без эха.
 - Собственные ошибки, кроме транспортных, используют конверт `{code, message, fieldErrors, requestID}`; ошибки полей — коды `Required`, `TooShort`, `TooLong`, `InvalidCharacters` (gateway#10). `POST /healthz` получает `405` в этом конверте.
 - Gateway не передаёт upstream свои cookie и `X-CSRF-Token` и не даёт upstream установить эти cookie.
+- Буквальный `U+FFFD` допустим в пароле, имени и логине. Некорректный UTF-8 и одиночные суррогатные escape-последовательности в JSON отклоняются при разборе (`400 InvalidRequest` для тела запроса, ошибка запуска для файла учётной записи). Ответы `401` содержат `WWW-Authenticate`.
 - Образ создаёт `/data/operator` (0700, 65532:65532) для тома учётной записи.
 
 - Обновлены закреплённые GitHub Actions до выпусков с поддержкой Node.js 24.

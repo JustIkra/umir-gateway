@@ -68,6 +68,10 @@ func (a *API) reject(w http.ResponseWriter, r *http.Request, status int, p httpa
 	httpapi.WriteProblem(w, r, status, p)
 }
 
+// challenge answers every 401, as RFC 9110 requires. No scheme is registered for cookie sessions, and
+// browsers show no sign-in prompt for an unknown one.
+const challenge = `Session realm="umir-operator"`
+
 // fieldMessages are the developer messages of the 422 codes.
 var fieldMessages = map[string]string{
 	"InvalidDisplayName": "display name must contain 2 to 80 characters without control characters",
@@ -87,8 +91,10 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 		w.Header().Set("Retry-After", strconv.Itoa(int(limited.RetryAfter/time.Second)))
 		a.problem(w, r, http.StatusTooManyRequests, "LoginRateLimited", "too many login attempts")
 	case errors.Is(err, operator.ErrInvalidCredentials):
+		w.Header().Set("WWW-Authenticate", challenge)
 		a.problem(w, r, http.StatusUnauthorized, "InvalidCredentials", "login or password is incorrect")
 	case errors.Is(err, operator.ErrUnauthenticated):
+		w.Header().Set("WWW-Authenticate", challenge)
 		a.problem(w, r, http.StatusUnauthorized, "Unauthenticated", "sign in to continue")
 	case errors.Is(err, operator.ErrInvalidCSRFToken):
 		a.problem(w, r, http.StatusForbidden, "InvalidCsrfToken", "CSRF token is missing or invalid")

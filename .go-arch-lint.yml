@@ -52,6 +52,6 @@ deps:
   accountfile:
     mayDependOn: [accountfile, operator, strictjson]
   operatorhttp:
-    mayDependOn: [operatorhttp, operator, httpapi]
+    mayDependOn: [operatorhttp, operator, httpapi, strictjson]
   strictjson:
     mayDependOn: [strictjson]

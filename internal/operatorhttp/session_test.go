@@ -343,3 +343,19 @@ func TestRememberMeKeepsTheCookieUntilTheAbsoluteDeadline(t *testing.T) {
 		cookies: []*http.Cookie{preauth}, csrf: token, origin: testOrigin,
 	}), http.StatusBadRequest, "InvalidRequest")
 }
+
+func TestUnauthorizedResponsesCarryAChallenge(t *testing.T) {
+	f := loopbackFixture(t)
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"me without session":       f.do(call{method: http.MethodGet, path: "/api/operator/me"}),
+		"wrong password":           f.signIn("wrong password!"),
+		"business without session": f.send(f.api.Protect(&upstream{t: t}), call{method: http.MethodGet, path: "/api/serving/menu"}),
+	} {
+		if got := w.Header().Get("WWW-Authenticate"); w.Code != http.StatusUnauthorized || got != `Session realm="umir-operator"` {
+			t.Errorf("%s: %d, WWW-Authenticate %q", name, w.Code, got)
+		}
+	}
+	if w := f.do(call{method: http.MethodPut, path: "/api/operator/session"}); w.Header().Get("WWW-Authenticate") != "" {
+		t.Errorf("405 carries a challenge: %v", w.Header())
+	}
+}

@@ -1,6 +1,7 @@
 package operatorhttp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"mime"
 	"net/http"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/strictjson"
 )
 
 // CSRFHeader carries the synchronizer token of every unsafe request.
@@ -63,7 +66,8 @@ func (a *API) admitOrigin(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // decode reads exactly one JSON object into dst. It answers 415, 413 or 400 and returns false when
-// the body is not one.
+// the body is not one. Invalid UTF-8 and unpaired surrogate escapes are rejected before decoding,
+// because encoding/json would silently turn them into U+FFFD.
 func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
 		a.problem(w, r, http.StatusUnsupportedMediaType, "UnsupportedMediaType", "send the body as application/json")
@@ -76,14 +80,19 @@ func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 			return false
 		}
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
-	decoder.DisallowUnknownFields()
-	err := decoder.Decode(dst)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err == nil {
-		if extra := decoder.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
-			err = extra
-			if err == nil {
-				err = errors.New("data after the JSON object")
+		err = strictjson.CheckText(body)
+	}
+	if err == nil {
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		if err = decoder.Decode(dst); err == nil {
+			if extra := decoder.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
+				err = extra
+				if err == nil {
+					err = errors.New("data after the JSON object")
+				}
 			}
 		}
 	}

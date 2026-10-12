@@ -171,3 +171,26 @@ func TestLogsCarryNoSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestBodiesWithMalformedTextAreRejected(t *testing.T) {
+	f := loopbackFixture(t)
+	session, token := f.login()
+	// A literal U+FFFD is valid text; an unpaired surrogate escape or invalid UTF-8 would silently
+	// become one, so those bodies are rejected before decoding.
+	if w := f.patch("/api/operator/me/display-name", `{"displayName":"Опе\ufffdратор"}`, session, token); w.Code != http.StatusOK {
+		t.Fatalf("literal U+FFFD: %d %s", w.Code, w.Body)
+	}
+	for _, body := range []string{`{"displayName":"Опе\ud800ратор"}`, "{\"displayName\":\"bad\xff name\"}"} {
+		wantProblem(t, f.patch("/api/operator/me/display-name", body, session, token), http.StatusBadRequest, "InvalidRequest")
+	}
+	preauth, anonymous := f.anonymous()
+	login := f.do(call{
+		method: http.MethodPost, path: "/api/operator/session",
+		body:    `{"login":"operator","password":"correct horse battery stapl\ud800"}`,
+		cookies: []*http.Cookie{preauth}, csrf: anonymous, origin: testOrigin,
+	})
+	wantProblem(t, login, http.StatusBadRequest, "InvalidRequest")
+	if commits := f.store.commits(); len(commits) != 1 || commits[0].DisplayName != "Опе\uFFFDратор" {
+		t.Errorf("commits = %+v", commits)
+	}
+}
