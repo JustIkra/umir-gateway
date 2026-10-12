@@ -11,10 +11,12 @@ import (
 
 // clearSessions implements the clear-sessions command: it empties the session list of the account file
 // and keeps the account. Run it with the gateway stopped after restoring an older backup, so sessions
-// that were logged out since the backup cannot come back.
+// that were logged out since the backup cannot come back. Only the account is validated, so the command
+// also repairs a file whose session records the gateway refuses to load.
 func clearSessions(cfg config.Operator, stdout io.Writer) error {
 	state, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{}, accountfile.Options{
-		NewProfileID: newToken, Validate: operator.ValidateState,
+		NewProfileID: newToken,
+		Validate:     func(state operator.State) error { return operator.ValidateAccount(state.Account) },
 	})
 	if err != nil {
 		return err
