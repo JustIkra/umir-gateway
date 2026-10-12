@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,28 +104,28 @@ func TestFeedbackTimeoutKeepsClientConnectionUsable(t *testing.T) {
 	front := httptest.NewServer(gatewayWith(t, values))
 	defer front.Close()
 	client := front.Client()
-	do := func(request *http.Request) *http.Response {
+	// do reads and closes the body, so the connection can be reused by the next request.
+	do := func(request *http.Request) (int, []*http.Cookie, []byte) {
 		t.Helper()
 		response, err := client.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			if err := response.Body.Close(); err != nil {
-				t.Errorf("close response body: %v", err)
-			}
-		})
-		return response
+		body, readErr := io.ReadAll(response.Body)
+		if closeErr := response.Body.Close(); readErr != nil || closeErr != nil {
+			t.Fatalf("read response: %v, %v", readErr, closeErr)
+		}
+		return response.StatusCode, response.Cookies(), body
 	}
 	bootstrap, err := http.NewRequest(http.MethodGet, front.URL+"/api/operator/csrf", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	csrf := do(bootstrap)
+	_, cookies, data := do(bootstrap)
 	var body struct {
 		CSRFToken string `json:"csrfToken"`
 	}
-	if err := json.NewDecoder(csrf.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		t.Fatal(err)
 	}
 	// The second post reuses the keep-alive connection of the timed out one.
@@ -136,15 +137,12 @@ func TestFeedbackTimeoutKeepsClientConnectionUsable(t *testing.T) {
 		post.Header.Set("Content-Type", "application/json")
 		post.Header.Set("Origin", testOrigin)
 		post.Header.Set("X-CSRF-Token", body.CSRFToken)
-		for _, cookie := range csrf.Cookies() {
+		for _, cookie := range cookies {
 			post.AddCookie(cookie)
 		}
-		response := do(post)
-		if _, err := io.Copy(io.Discard, response.Body); err != nil {
-			t.Errorf("read response body: %v", err)
-		}
-		if response.StatusCode != want {
-			t.Fatalf("post %d: %d, want %d", i+1, response.StatusCode, want)
+		status, _, _ := do(post)
+		if status != want {
+			t.Fatalf("post %d: %d, want %d", i+1, status, want)
 		}
 	}
 }
@@ -173,11 +171,14 @@ func TestFeedbackBodyIsReadWithinTheExchangeBudget(t *testing.T) {
 	}
 	// The client sends the rest of the body after the exchange budget has run out.
 	reader, writer := io.Pipe()
+	written := make(chan error, 1)
 	go func() {
-		_, _ = io.WriteString(writer, `{"submissionID":`)
-		time.Sleep(300 * time.Millisecond)
-		_, _ = io.WriteString(writer, `"s-1"}`)
-		_ = writer.Close()
+		_, err := io.WriteString(writer, `{"submissionID":`)
+		if err == nil {
+			time.Sleep(300 * time.Millisecond)
+			_, err = io.WriteString(writer, `"s-1"}`)
+		}
+		written <- errors.Join(err, writer.Close())
 	}()
 	post, err := http.NewRequest(http.MethodPost, front.URL+"/api/feedback", reader)
 	if err != nil {
@@ -189,13 +190,19 @@ func TestFeedbackBodyIsReadWithinTheExchangeBudget(t *testing.T) {
 	for _, cookie := range bootstrap.Cookies() {
 		post.AddCookie(cookie)
 	}
+	// The gateway may close the connection instead of answering; either way nothing is dispatched.
 	response, err := front.Client().Do(post)
 	if err == nil {
-		_, _ = io.Copy(io.Discard, response.Body)
-		_ = response.Body.Close()
+		_, copyErr := io.Copy(io.Discard, response.Body)
+		if closeErr := response.Body.Close(); copyErr != nil || closeErr != nil {
+			t.Errorf("read response: %v, %v", copyErr, closeErr)
+		}
 		if response.StatusCode != http.StatusBadRequest {
 			t.Errorf("slow body: %d, want 400 before dispatch", response.StatusCode)
 		}
+	}
+	if err := <-written; err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("send body: %v", err)
 	}
 	if calls.Load() != 0 {
 		t.Error("a body read after the budget reached the service")
