@@ -208,7 +208,11 @@ func TestNewServiceRejectsInvalidSetup(t *testing.T) {
 			MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
 			MaxVerifications: DefaultMaxVerifications, MaxQueuedLogins: DefaultMaxQueuedLogins,
 			FailureLimit: DefaultFailureLimit, FailureWindow: DefaultFailureWindow, Cooldown: DefaultCooldown,
+			RememberTimeout: DefaultRememberTimeout,
 		}
+	}
+	if _, err := NewService(State{Account: testAccount()}, valid()); err != nil {
+		t.Fatalf("valid setup rejected: %v", err)
 	}
 	for name, change := range map[string]func(*Options, *Account){
 		"store":           func(o *Options, _ *Account) { o.Store = nil },
