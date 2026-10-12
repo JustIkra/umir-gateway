@@ -24,7 +24,7 @@ func (a *API) updateDisplayName(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		DisplayName *string `json:"displayName"`
 	}
-	if !a.decode(w, r, &body) {
+	if !a.decode(w, r, &body, "displayName") {
 		return
 	}
 	if body.DisplayName == nil {
@@ -49,7 +49,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		CurrentPassword *string `json:"currentPassword"`
 		NewPassword     *string `json:"newPassword"`
 	}
-	if !a.decode(w, r, &body) {
+	if !a.decode(w, r, &body, "currentPassword", "newPassword") {
 		return
 	}
 	if body.CurrentPassword == nil || body.NewPassword == nil {

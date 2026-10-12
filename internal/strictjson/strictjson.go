@@ -1,14 +1,54 @@
-// Package strictjson finds JSON text that encoding/json would silently decode to U+FFFD.
+// Package strictjson rejects JSON that encoding/json would silently accept: text it would decode to U+FFFD
+// and objects with duplicate keys.
 package strictjson
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 	"unicode/utf8"
 )
 
-// ErrText reports invalid UTF-8 or an unpaired UTF-16 surrogate escape in a JSON document.
-var ErrText = errors.New("JSON text has invalid UTF-8 or an unpaired surrogate escape")
+var (
+	// ErrText reports invalid UTF-8 or an unpaired UTF-16 surrogate escape in a JSON document.
+	ErrText = errors.New("JSON text has invalid UTF-8 or an unpaired surrogate escape")
+	// ErrObject reports a document that is not exactly one JSON object with unique keys.
+	ErrObject = errors.New("JSON document is not one object with unique keys")
+)
+
+// Object reads exactly one JSON object and returns its members by their exact keys. encoding/json would
+// keep the last of duplicate keys, so duplicates are rejected, as is data after the object.
+func Object(data []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil, ErrObject
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, isKey := token.(string)
+		if err != nil || !isKey {
+			return nil, ErrObject
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, ErrObject
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, ErrObject
+		}
+		fields[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, ErrObject
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, ErrObject
+	}
+	return fields, nil
+}
 
 // CheckText returns ErrText when data holds invalid UTF-8 or a \uD800-\uDFFF escape that is not part of
 // a surrogate pair. encoding/json decodes both to U+FFFD, so the decoded value would differ from what

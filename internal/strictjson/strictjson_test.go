@@ -34,3 +34,22 @@ func TestCheckText(t *testing.T) {
 		}
 	}
 }
+
+func TestObject(t *testing.T) {
+	fields, err := Object([]byte(` {"login":"operator","Login":"other","nested":{"a":1,"a":2}} `))
+	if err != nil || len(fields) != 3 || string(fields["Login"]) != `"other"` {
+		t.Fatalf("Object = %v, %v; want three members by exact key", fields, err)
+	}
+	for _, invalid := range []string{
+		`{"login":"a","login":"b"}`,
+		`{"login":"a"} {}`,
+		`{"login":"a"`,
+		`["login"]`,
+		`null`,
+		``,
+	} {
+		if _, err := Object([]byte(invalid)); !errors.Is(err, ErrObject) {
+			t.Errorf("Object(%s) = %v, want ErrObject", invalid, err)
+		}
+	}
+}

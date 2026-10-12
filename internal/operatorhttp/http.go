@@ -9,6 +9,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/strictjson"
@@ -71,11 +72,16 @@ func (a *API) admitOrigin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// decode reads exactly one JSON object into dst. It answers 415, 413 or 400 and returns false when
-// the body is not one.
-func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
+// decode reads exactly one JSON object into dst. Its keys must be among keys, spelled exactly, unique
+// and not null; encoding/json alone would match keys case-insensitively, keep the last duplicate and
+// read null as the zero value. It answers 415, 413 or 400 and returns false when the body is not one.
+func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any, keys ...string) bool {
 	body, ok := a.readJSON(w, r, maxBody)
 	if !ok {
+		return false
+	}
+	if !exactFields(body, keys) {
+		a.problem(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not the expected JSON object")
 		return false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
@@ -92,6 +98,20 @@ func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err != nil {
 		a.problem(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not the expected JSON object")
 		return false
+	}
+	return true
+}
+
+// exactFields reports whether body is one JSON object whose keys are unique, among keys and not null.
+func exactFields(body []byte, keys []string) bool {
+	fields, err := strictjson.Object(body)
+	if err != nil {
+		return false
+	}
+	for key, value := range fields {
+		if !slices.Contains(keys, key) || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return false
+		}
 	}
 	return true
 }
