@@ -22,6 +22,11 @@ type Params struct {
 // Baseline is the OWASP minimum: 19 MiB, 2 iterations, parallelism 1.
 var Baseline = Params{MemoryKiB: 19 * 1024, Iterations: 2, Parallelism: 1}
 
+// Selected is the cost of new hashes: 64 MiB, 2 iterations, parallelism 1, chosen with BenchmarkHash
+// (README lists the measurements). The two concurrent verifications the operator module allows use
+// 128 MiB together.
+var Selected = Params{MemoryKiB: 64 * 1024, Iterations: 2, Parallelism: 1}
+
 const (
 	saltLen = 16
 	keyLen  = 32

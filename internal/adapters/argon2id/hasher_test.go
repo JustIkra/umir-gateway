@@ -2,7 +2,9 @@ package argon2id
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -110,5 +112,40 @@ func TestHashReportsRandomFailure(t *testing.T) {
 	}
 	if _, err := hasher.Hash("correct horse battery staple"); !errors.Is(err, broken) {
 		t.Fatalf("Hash error = %v", err)
+	}
+}
+
+func TestSelectedParameters(t *testing.T) {
+	hasher, err := New(Selected, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := hasher.Hash("correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$", Selected.MemoryKiB, Selected.Iterations, Selected.Parallelism)
+	if !strings.HasPrefix(encoded, prefix) || Selected.MemoryKiB < Baseline.MemoryKiB {
+		t.Fatalf("hash %q does not use the selected cost", encoded)
+	}
+}
+
+// BenchmarkHash measures one hash at each cost; run it on the deployment VM before changing Selected.
+func BenchmarkHash(b *testing.B) {
+	for _, tc := range []struct {
+		name   string
+		params Params
+	}{{"baseline", Baseline}, {"selected", Selected}} {
+		b.Run(tc.name, func(b *testing.B) {
+			hasher, err := New(tc.params, rand.Reader)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for b.Loop() {
+				if _, err := hasher.Hash("correct horse battery staple"); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
