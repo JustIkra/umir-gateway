@@ -6,5 +6,13 @@ services:
       - "127.0.0.1:18081:8080"
     environment:
       TZ: Europe/Moscow
+      OPERATOR_COOKIE_MODE: loopback-development
+      OPERATOR_PUBLIC_ORIGIN: http://127.0.0.1:18081
+      OPERATOR_BOOTSTRAP_LOGIN: ${OPERATOR_BOOTSTRAP_LOGIN:-}
+      OPERATOR_BOOTSTRAP_DISPLAY_NAME: ${OPERATOR_BOOTSTRAP_DISPLAY_NAME:-}
+      OPERATOR_BOOTSTRAP_PASSWORD_HASH: ${OPERATOR_BOOTSTRAP_PASSWORD_HASH:-}
+    volumes:
+      - operator-data:/data/operator
     restart: unless-stopped
-
+volumes:
+  operator-data:

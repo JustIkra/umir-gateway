@@ -14,6 +14,15 @@ components:
   process: {in: "cmd/**"}
   testsupport: {in: "tests/testsupport/**"}
   integration: {in: "tests/integration/**"}
+  operator: {in: "internal/operator/**"}
+  passwordhash: {in: "internal/adapters/argon2id/**"}
+  accountfile: {in: "internal/adapters/accountfile/**"}
+  operatorhttp: {in: "internal/operatorhttp/**"}
+  strictjson: {in: "internal/strictjson/**"}
+vendors:
+  x-text-norm: {in: "golang.org/x/text/unicode/norm"}
+  x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
+  x-term: {in: "golang.org/x/term"}
 deps:
   config:
     mayDependOn: [config]
@@ -28,8 +37,21 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp]
+    canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport]
   integration:
     mayDependOn: [integration, bootstrap, transport, proxy, testsupport]
+  operator:
+    mayDependOn: [operator]
+    canUse: [x-text-norm]
+  passwordhash:
+    mayDependOn: [passwordhash]
+    canUse: [x-crypto-argon2]
+  accountfile:
+    mayDependOn: [accountfile, operator, strictjson]
+  operatorhttp:
+    mayDependOn: [operatorhttp, operator, httpapi, strictjson]
+  strictjson:
+    mayDependOn: [strictjson]

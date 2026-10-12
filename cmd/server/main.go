@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -14,22 +15,71 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/JustIkra/umir-gateway/internal/adapters/accountfile"
+	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
+	"github.com/JustIkra/umir-gateway/internal/operator"
+	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
 
-// newHandler assembles the gateway: one proxy per upstream behind the router.
-func newHandler(cfg config.Config) (http.Handler, error) {
+// newToken returns 128 bits of randomness as cookie-safe text.
+func newToken() (string, error) { return rand.Text(), nil }
+
+// newAccounts opens the account file, creating it from the bootstrap settings only when it is absent,
+// and starts the operator account module.
+func newAccounts(cfg config.Operator) (*operator.Service, error) {
+	hasher, err := argon2id.New(argon2id.Selected, rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	state, store, err := accountfile.Open(cfg.StorePath, accountfile.Bootstrap{
+		Login: cfg.BootstrapLogin, DisplayName: cfg.BootstrapDisplayName, PasswordHash: cfg.BootstrapPasswordHash,
+	}, accountfile.Options{
+		NewProfileID: newToken,
+		Validate: func(state operator.State) error {
+			if err := operator.ValidateState(state); err != nil {
+				return err
+			}
+			return hasher.Check(state.Account.PasswordHash)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("operator account: %w", err)
+	}
+	return operator.NewService(state, operator.Options{
+		Store: store, Hasher: hasher, Now: time.Now, NewToken: newToken,
+		IdleTimeout: cfg.IdleTimeout, AbsoluteTimeout: cfg.AbsoluteTimeout, RememberTimeout: operator.DefaultRememberTimeout,
+		MaxSessions: operator.DefaultMaxSessions, MaxAnonymous: operator.DefaultMaxAnonymous,
+		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
+		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
+		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
+		FeedbackContextLimit: operator.DefaultFeedbackContextLimit, FeedbackProcessLimit: operator.DefaultFeedbackProcessLimit,
+		FeedbackWindow: operator.DefaultFeedbackWindow,
+	})
+}
+
+// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
+// Each upstream is wrapped so operator credentials never reach it and it cannot set them.
+func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.Logger) (http.Handler, error) {
 	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
-	upstream := func(target *url.URL) (http.Handler, error) {
+	proxy := func(target *url.URL) (http.Handler, error) {
 		proxy, err := httpupstream.NewProxy(target, transport)
 		if err != nil {
 			return nil, err
 		}
 		proxy.ErrorHandler = httpapi.WriteTransportError
-		return withDeadline(proxy, cfg.UpstreamTimeout), nil
+		proxy.ModifyResponse = operatorhttp.DropReservedCookies
+		return operatorhttp.StripCredentials(proxy), nil
+	}
+	upstream := func(target *url.URL) (http.Handler, error) {
+		h, err := proxy(target)
+		if err != nil {
+			return nil, err
+		}
+		return withDeadline(h, cfg.UpstreamTimeout), nil
 	}
 	serving, err := upstream(cfg.ServingURL)
 	if err != nil {
@@ -39,7 +89,26 @@ func newHandler(cfg config.Config) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("warehouse: %w", err)
 	}
-	return httpapi.NewRouter(httpapi.Upstreams{Serving: serving, Warehouse: warehouse})
+	// The feedback guard reads the body itself, so the deadline wraps the guard: the body is read under
+	// the exchange budget, and no read deadline is set once the connection is idle again.
+	feedback, err := proxy(cfg.FeedbackURL)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: %w", err)
+	}
+	api, err := operatorhttp.New(operatorhttp.Options{
+		Accounts: accounts, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode),
+		PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return httpapi.NewRouter(httpapi.Routes{
+		Serving: serving, Warehouse: warehouse, Operator: api, Protect: api.Protect,
+		Feedback: feedback, NewRequestID: rand.Text,
+		GuardFeedback: func(next http.Handler) http.Handler {
+			return withDeadline(api.GuardFeedback(next), cfg.UpstreamTimeout)
+		},
+	})
 }
 
 // withDeadline bounds the whole upstream exchange, including reading the client body;
@@ -72,6 +141,9 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 }
 
 const shutdownGrace = 10 * time.Second
+
+// listenAddress binds LISTEN_HOST: loopback for a process started by hand, all interfaces in the image.
+func listenAddress(cfg config.Config) string { return net.JoinHostPort(cfg.ListenHost, cfg.Port) }
 
 func run(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
 	served := make(chan error, 1)
@@ -113,9 +185,19 @@ func healthcheck(port string) (result error) {
 }
 
 func main() {
+	// hash-password runs before configuration: it is used to create the bootstrap settings.
+	if len(os.Args) >= 2 && os.Args[1] == "hash-password" {
+		os.Exit(runHashPassword(os.Args[2:]))
+	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if len(os.Args) == 2 && os.Args[1] == "clear-sessions" {
+		if err := clearSessions(cfg.Operator, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(cfg.Port); err != nil {
@@ -123,12 +205,16 @@ func main() {
 		}
 		return
 	}
-	app, err := newHandler(cfg)
+	accounts, err := newAccounts(cfg.Operator)
+	if err != nil {
+		log.Fatal(err)
+	}
+	app, err := newHandler(cfg, accounts, log.Default())
 	if err != nil {
 		log.Fatal(err)
 	}
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              listenAddress(cfg),
 		Handler:           app,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

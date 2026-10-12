@@ -14,23 +14,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/JustIkra/umir-gateway/internal/config"
 )
 
+// gateway assembles the gateway and sends every request as the signed-in operator, so the proxy tests
+// prove that authenticated traffic behaves as before.
 func gateway(t *testing.T, servingURL, warehouseURL string, timeout string) http.Handler {
 	t.Helper()
-	cfg, err := config.Load(func(key string) string {
-		return map[string]string{"SERVING_URL": servingURL, "WAREHOUSE_URL": warehouseURL, "UPSTREAM_TIMEOUT": timeout}[key]
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	app, err := newHandler(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return app
+	app := gatewayApp(t, servingURL, warehouseURL, timeout)
+	return withSession(app, signIn(t, app))
 }
 
 func transportError(t *testing.T, response *httptest.ResponseRecorder) map[string]string {

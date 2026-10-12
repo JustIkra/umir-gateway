@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -82,6 +83,9 @@ func TestGatewayChildProcess(t *testing.T) {
 	if os.Getenv("UMIR_GATEWAY_TEST_CHILD") != "1" {
 		return
 	}
+	if args := os.Getenv("UMIR_GATEWAY_TEST_ARGS"); args != "" {
+		os.Args = append([]string{os.Args[0]}, strings.Fields(args)...)
+	}
 	main()
 }
 
@@ -110,7 +114,8 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestGatewayChildProcess$")
-	child.Env = childEnvironment(map[string]string{
+	environment := operatorEnv(t)
+	maps.Copy(environment, map[string]string{
 		"UMIR_GATEWAY_TEST_CHILD": "1",
 		"PORT":                    port,
 		"SERVING_URL":             upstream.URL,
@@ -118,6 +123,7 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 		"UPSTREAM_TIMEOUT":        "5s",
 		"GORACE":                  "atexit_sleep_ms=0",
 	})
+	child.Env = childEnvironment(environment)
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +149,7 @@ func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 	}()
 	address := "http://127.0.0.1:" + port
 	waitChildHealthy(t, address, exited)
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := signInOver(t, address)
 	responseDone := make(chan error, 1)
 	go func() {
 		response, err := client.Get(address + "/api/serving/menu")
