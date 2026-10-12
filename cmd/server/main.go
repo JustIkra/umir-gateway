@@ -174,6 +174,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if len(os.Args) == 2 && os.Args[1] == "clear-sessions" {
+		if err := clearSessions(cfg.Operator, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(cfg.Port); err != nil {
 			log.Fatal(err)

@@ -68,10 +68,14 @@ func gatewayApp(t *testing.T, servingURL, warehouseURL, timeout string) http.Han
 	t.Helper()
 	values := operatorEnv(t)
 	values["SERVING_URL"], values["WAREHOUSE_URL"], values["UPSTREAM_TIMEOUT"] = servingURL, warehouseURL, timeout
-	cfg, err := config.Load(func(key string) string { return values[key] })
-	if err != nil {
-		t.Fatal(err)
-	}
+	return gatewayWith(t, values)
+}
+
+// gatewayWith assembles the gateway from settings; two calls with the same settings share the account
+// file, like a restarted gateway.
+func gatewayWith(t *testing.T, values map[string]string) http.Handler {
+	t.Helper()
+	cfg := loadConfig(t, values)
 	accounts, err := newAccounts(cfg.Operator)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +85,15 @@ func gatewayApp(t *testing.T, servingURL, warehouseURL, timeout string) http.Han
 		t.Fatal(err)
 	}
 	return app
+}
+
+func loadConfig(t *testing.T, values map[string]string) config.Config {
+	t.Helper()
+	cfg, err := config.Load(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 type credentials struct {

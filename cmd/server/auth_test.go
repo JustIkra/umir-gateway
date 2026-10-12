@@ -93,3 +93,32 @@ func TestInvalidBootstrapFailsWithoutEchoOrFile(t *testing.T) {
 		t.Errorf("rejected bootstrap created the account file: %v", err)
 	}
 }
+
+func TestSessionsSurviveAGatewayRestart(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer upstream.Close()
+	values := operatorEnv(t)
+	values["SERVING_URL"], values["WAREHOUSE_URL"] = upstream.URL, upstream.URL
+	creds := signIn(t, gatewayWith(t, values))
+	restarted := withSession(gatewayWith(t, values), creds)
+	response := httptest.NewRecorder()
+	restarted.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/serving/orders", strings.NewReader(`{}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("session after a restart: %d %s", response.Code, response.Body)
+	}
+}
+
+func TestClearSessionsEmptiesTheStoredSessions(t *testing.T) {
+	values := operatorEnv(t)
+	creds := signIn(t, gatewayWith(t, values))
+	var out strings.Builder
+	if err := clearSessions(loadConfig(t, values).Operator, &out); err != nil || out.String() != "cleared sessions: 1\n" {
+		t.Fatalf("clearSessions = %q, %v", out.String(), err)
+	}
+	restarted := withSession(gatewayWith(t, values), creds)
+	response := httptest.NewRecorder()
+	restarted.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/operator/me", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("cleared session: %d %s", response.Code, response.Body)
+	}
+}
