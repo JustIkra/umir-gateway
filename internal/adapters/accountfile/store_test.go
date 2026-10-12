@@ -188,3 +188,16 @@ func TestOpenRejectsUnsafePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenKeepsALiteralReplacementCharacter(t *testing.T) {
+	for name, spelled := range map[string]string{"raw": "Опе\xef\xbf\xbdратор", "escaped": `Опе\ufffdратор`} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(accountDir(t), "account.json")
+			writeAccount(t, path, strings.Replace(validFile, "Оператор", spelled, 1))
+			account, _, err := Open(path, testBootstrap(), testOptions())
+			if err != nil || account.DisplayName != "Опе\uFFFDратор" {
+				t.Fatalf("account = %+v, %v", account, err)
+			}
+		})
+	}
+}

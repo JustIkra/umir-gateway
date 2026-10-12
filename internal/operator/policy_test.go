@@ -19,6 +19,7 @@ func TestCanonicalDisplayName(t *testing.T) {
 		{"  Оператор\u00a0\t", "Оператор"},
 		{"e\u0301e\u0301", "\u00e9\u00e9"}, // NFC turns four code points into two
 		{"Ян", "Ян"},
+		{"Опе\uFFFDратор", "Опе\uFFFDратор"}, // a literal U+FFFD is valid text
 		{strings.Repeat("я", 80), strings.Repeat("я", 80)},
 	} {
 		got, err := CanonicalDisplayName(tc.raw)
@@ -36,7 +37,6 @@ func TestCanonicalDisplayName(t *testing.T) {
 		{strings.Repeat("я", 81), CodeTooLong},
 		{"a\x00b", CodeInvalidCharacters},
 		{"bad\xffname", CodeInvalidCharacters},
-		{"Опе\uFFFDратор", CodeInvalidCharacters},
 	} {
 		_, err := CanonicalDisplayName(tc.raw)
 		wantFieldError(t, err, "displayName", tc.code)
@@ -44,12 +44,12 @@ func TestCanonicalDisplayName(t *testing.T) {
 }
 
 func TestValidateLogin(t *testing.T) {
-	for _, login := range []string{"operator", "оператор-1"} {
+	for _, login := range []string{"operator", "оператор-1", "oper\uFFFDtor"} {
 		if err := ValidateLogin(login); err != nil {
 			t.Errorf("ValidateLogin(%q) = %v", login, err)
 		}
 	}
-	for _, login := range []string{"", " operator", "operator ", "a\tb", strings.Repeat("x", 129), "bad\xff", "oper\uFFFDtor"} {
+	for _, login := range []string{"", " operator", "operator ", "a\tb", strings.Repeat("x", 129), "bad\xff"} {
 		if err := ValidateLogin(login); err == nil {
 			t.Errorf("ValidateLogin(%q) accepted", login)
 		}
@@ -62,6 +62,7 @@ func TestCheckPassword(t *testing.T) {
 		"жёлтый д",                     // 8 code points, 15 bytes
 		strings.Repeat("🙂", 32),        // 32 code points, 128 bytes
 		"  spaces kept  ",              // never trimmed
+		"password\uFFFD",               // a literal U+FFFD is valid Unicode; malformed input is rejected where it is decoded
 		"e\u0301e\u0301e\u0301e\u0301", // 8 code points; never normalized to 4
 	} {
 		if err := CheckPassword(password); err != nil {
@@ -77,7 +78,6 @@ func TestCheckPassword(t *testing.T) {
 		{"\u00e9\u00e9\u00e9\u00e9", CodeTooShort}, // 4 precomposed code points
 		{strings.Repeat("🙂", 33), CodeTooLong},
 		{"bad utf8\xff", CodeInvalidCharacters},
-		{"password\uFFFD", CodeInvalidCharacters}, // what encoding/json makes of invalid UTF-8 or a lone surrogate
 	} {
 		err := CheckPassword(tc.password)
 		wantFieldError(t, err, "newPassword", tc.code)

@@ -36,10 +36,10 @@ type FieldError struct {
 
 func (e *FieldError) Error() string { return e.Field + ": " + string(e.Code) }
 
-// validText rejects invalid UTF-8 and U+FFFD, which encoding/json substitutes for invalid bytes and
-// lone surrogates; accepting it would store a value other than the one the client sent.
+// validText rejects invalid UTF-8. A literal U+FFFD is valid text; input that a decoder would turn into
+// U+FFFD (invalid bytes, unpaired surrogate escapes) is rejected where it is decoded.
 func validText(s string) bool {
-	return utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError)
+	return utf8.ValidString(s)
 }
 
 // lengthCode reports why a value of n code points is outside [lo, hi], or "" when it is inside.

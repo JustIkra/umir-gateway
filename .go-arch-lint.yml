@@ -18,6 +18,7 @@ components:
   passwordhash: {in: "internal/adapters/argon2id/**"}
   accountfile: {in: "internal/adapters/accountfile/**"}
   operatorhttp: {in: "internal/operatorhttp/**"}
+  strictjson: {in: "internal/strictjson/**"}
 vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
@@ -49,6 +50,8 @@ deps:
     mayDependOn: [passwordhash]
     canUse: [x-crypto-argon2]
   accountfile:
-    mayDependOn: [accountfile, operator]
+    mayDependOn: [accountfile, operator, strictjson]
   operatorhttp:
     mayDependOn: [operatorhttp, operator, httpapi]
+  strictjson:
+    mayDependOn: [strictjson]

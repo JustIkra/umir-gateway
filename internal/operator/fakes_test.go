@@ -24,15 +24,29 @@ func (c *clock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now
 func (c *clock) Advance(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.now = c.now.Add(d) }
 
 type tokens struct {
-	mu sync.Mutex
-	n  int
+	mu     sync.Mutex
+	n      int
+	failOn map[int]bool
 }
 
 func (t *tokens) New() (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.n++
+	if t.failOn[t.n] {
+		return "", errors.New("entropy unavailable")
+	}
 	return fmt.Sprintf("token-%d", t.n), nil
+}
+
+// failCall makes the n-th token request, counted from the start of the test, fail.
+func (t *tokens) failCall(n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.failOn == nil {
+		t.failOn = map[int]bool{}
+	}
+	t.failOn[n] = true
 }
 
 // fakeHash encodes the exact password bytes as ASCII, as a real PHC string would be.
@@ -104,12 +118,14 @@ type fixture struct {
 	clock  *clock
 	hasher *fakeHasher
 	store  *fakeStore
+	tokens *tokens
 }
 
 func newFixture(t *testing.T, change func(*Options)) fixture {
 	t.Helper()
 	f := fixture{clock: &clock{now: time.Date(2026, 10, 11, 12, 0, 0, 0, moscow)}, hasher: &fakeHasher{}, store: &fakeStore{}}
 	ids := &tokens{}
+	f.tokens = ids
 	opts := Options{
 		Store: f.store, Hasher: f.hasher, Now: f.clock.Now, NewToken: ids.New,
 		IdleTimeout: DefaultIdleTimeout, AbsoluteTimeout: DefaultAbsoluteTimeout, MaxSessions: DefaultMaxSessions,

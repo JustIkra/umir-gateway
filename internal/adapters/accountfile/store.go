@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/JustIkra/umir-gateway/internal/operator"
+	"github.com/JustIkra/umir-gateway/internal/strictjson"
 )
 
 const schemaVersion = 1
@@ -131,10 +131,10 @@ func encode(account operator.Account) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// decode accepts exactly one object with known, unique, exactly spelled fields; JSON would silently
-// replace invalid UTF-8, and ValidateAccount rejects the U+FFFD that lone-surrogate escapes become.
+// decode accepts exactly one object with known, unique, exactly spelled fields. Invalid UTF-8 and
+// unpaired surrogate escapes, which JSON would silently turn into U+FFFD, reject the file.
 func decode(data []byte) (operator.Account, error) {
-	if !utf8.Valid(data) || rejectUnexpectedKeys(data) != nil {
+	if strictjson.CheckText(data) != nil || rejectUnexpectedKeys(data) != nil {
 		return operator.Account{}, errInvalidFile
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
