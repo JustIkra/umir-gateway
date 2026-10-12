@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Реальное время для `/app`. Журнал изменений в памяти (`JOURNAL_CAPACITY`, по умолчанию 1000) записывает допущенные изменяющие бизнес-запросы, смену имени оператора и запуски проверки сроков: метод, путь, статус и итог по статусу, без тел и данных запроса. Поток SSE `GET /api/live` передаёт сигналы `change`, минутные `tick`, сроки `session`, `session-ended` и доступность склада `upstream`; он не продлевает сессию, ограничен 8 потоками на сессию и 64 на процесс (`429 TooManyStreams`) и закрывается при остановке.
+- Заголовок `X-Umir-Activity: background` у бизнес-запросов и `GET /api/operator/me`: те же проверки без продления сессии и без записи файла учётной записи. Заголовок не уходит в upstream.
+- Проверку сроков запускает gateway (gateway#19): `POST /expiration-runs` склада раз в `EXPIRATION_RUN_INTERVAL` (по умолчанию `1s`), без наложения запусков, с бюджетом `UPSTREAM_TIMEOUT`. Браузер получает `404` на `/api/warehouse/expiration-runs`. Требует склада с этим маршрутом.
+
 - Persist ordinary business-session activity before dispatch, so restart preserves the renewed idle deadline. Known or unknown storage failures do not dispatch the business request. Reject account/session aggregates above 32 records and session limits above that bound.
 - Align the default private feedback URL with the service listener at port 8084.
 - Без активной паузы и при допустимом новом пароле смена пароля отклоняет `currentPassword` длиннее 32 Unicode code points до проверки учётных данных: `422 PasswordRejected` с `fieldErrors.currentPassword=TooLong`. Некорректный UTF-8 JSON по-прежнему получает `400 InvalidRequest`; сервисный слой возвращает `InvalidCharacters` для невалидной строки. В счёт и отзыв сессии входят только фактические неверные проверки пароля.
