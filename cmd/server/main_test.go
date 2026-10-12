@@ -46,8 +46,12 @@ func TestProxyRoutesPreserveRequestAndResponse(t *testing.T) {
 	for _, service := range []string{"serving", "warehouse"} {
 		t.Run(service, func(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/orders" || r.URL.RawQuery != "limit=2" || r.Method != http.MethodPost {
-					t.Errorf("request: %s %s", r.Method, r.URL)
+				// An escaped path, query and an ordinary end-to-end header arrive as the client sent them.
+				if r.URL.EscapedPath() != "/orders/%D0%B0%2Fb" || r.URL.RawQuery != "q=%2B1&x=a%20b&limit=2" || r.Method != http.MethodPost {
+					t.Errorf("request: %s %s", r.Method, r.URL.RequestURI())
+				}
+				if r.Header.Get("X-Client-Note") != "keep me" {
+					t.Errorf("end-to-end header: %q", r.Header.Get("X-Client-Note"))
 				}
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
@@ -69,7 +73,9 @@ func TestProxyRoutesPreserveRequestAndResponse(t *testing.T) {
 			app := gateway(t, urls["serving"], urls["warehouse"], "")
 
 			response := httptest.NewRecorder()
-			app.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+service+"/orders?limit=2", strings.NewReader("payload")))
+			request := httptest.NewRequest(http.MethodPost, "/api/"+service+"/orders/%D0%B0%2Fb?q=%2B1&x=a%20b&limit=2", strings.NewReader("payload"))
+			request.Header.Set("X-Client-Note", "keep me")
+			app.ServeHTTP(response, request)
 			if response.Code != http.StatusAccepted || response.Header().Get("X-Upstream") != service || response.Body.String() != "accepted" {
 				t.Fatalf("response: %d %s", response.Code, response.Body.String())
 			}
