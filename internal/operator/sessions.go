@@ -83,12 +83,21 @@ func (s *Service) activeLocked(token string, now time.Time) (*session, error) {
 }
 
 // restore keeps the stored sessions that are still valid for the account, the newest ones up to the bound.
+// A stored deadline never outlives the lifetime configured now for the session's mode.
 func (s *Service) restore(stored []StoredSession) {
 	now := s.opts.Now()
 	for _, r := range stored {
+		lifetime := s.opts.AbsoluteTimeout
+		if r.RememberMe {
+			lifetime = s.opts.RememberTimeout
+		}
+		expires := r.ExpiresAt
+		if limit := r.Created.Add(lifetime); limit.Before(expires) {
+			expires = limit
+		}
 		st := &session{
 			rememberMe: r.RememberMe, credentialVersion: r.CredentialVersion,
-			created: r.Created, lastSeen: r.LastSeen, storedLastSeen: r.LastSeen, expires: r.ExpiresAt,
+			created: r.Created, lastSeen: r.LastSeen, storedLastSeen: r.LastSeen, expires: expires,
 		}
 		if !s.expired(st, now) && st.credentialVersion == s.account.CredentialVersion {
 			s.sessions[r.Digest] = st

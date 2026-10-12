@@ -303,3 +303,27 @@ func TestLogoutOfAnExpiredSessionStoresNothing(t *testing.T) {
 		t.Errorf("login after the logout: %v", err)
 	}
 }
+
+func TestRestoreCapsStoredDeadlinesByTheConfiguredLifetimes(t *testing.T) {
+	f := newFixture(t, nil)
+	now := f.clock.Now()
+	created := now.Add(-2 * time.Hour)
+	record := func(token string, remembered bool) StoredSession {
+		return StoredSession{
+			Digest: digestOf(token), RememberMe: remembered, CredentialVersion: 1,
+			Created: created, LastSeen: now.Add(-time.Minute), ExpiresAt: now.Add(365 * 24 * time.Hour),
+		}
+	}
+	opts := f.opts
+	opts.AbsoluteTimeout, opts.RememberTimeout = time.Hour, 3*time.Hour
+	svc, err := NewService(State{Account: testAccount(), Sessions: []StoredSession{record("ordinary", false), record("remembered", true)}}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Authenticate("ordinary"); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("ordinary session past the configured absolute timeout: %v", err)
+	}
+	if _, got, err := svc.Authenticate("remembered"); err != nil || !got.AbsoluteExpiresAt.Equal(created.Add(3*time.Hour)) {
+		t.Errorf("remembered session = %+v, %v; want the configured lifetime", got, err)
+	}
+}
