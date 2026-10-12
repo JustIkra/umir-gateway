@@ -21,6 +21,8 @@ type Sessions interface {
 	Authenticate(id string) (operator.Profile, operator.Session, error)
 	// Authorize admits an unsafe request that carries the session's CSRF token.
 	Authorize(id, csrfToken string) (operator.Profile, operator.Session, error)
+	// Peek checks a session like Authenticate but neither extends it nor writes the store.
+	Peek(id string) (operator.Profile, operator.Session, error)
 }
 
 // Accounts is what the account routes need besides Sessions; *operator.Service implements it.

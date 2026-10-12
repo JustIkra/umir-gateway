@@ -16,19 +16,28 @@ var reserved = map[string]bool{
 // Protect admits a business request only with the operator's live session. GET, HEAD and OPTIONS need
 // the session; POST, PUT, PATCH and DELETE also need the exact Origin and the session's CSRF token.
 // Other methods are refused. Nothing reaches next before these checks pass, and a session that
-// expires after that does not affect the dispatched request.
+// expires after that does not affect the dispatched request. A background request passes the same
+// checks without extending the session.
 func (a *API) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := a.cookie(r, a.cookies.session)
 		var err error
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
-			_, _, err = a.accounts.Authenticate(id)
+			if background(r) {
+				_, _, err = a.accounts.Peek(id)
+			} else {
+				_, _, err = a.accounts.Authenticate(id)
+			}
 		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			if !a.admitOrigin(w, r) {
 				return
 			}
-			_, _, err = a.accounts.Authorize(id, r.Header.Get(CSRFHeader))
+			if background(r) {
+				err = a.peekAuthorized(id, r.Header.Get(CSRFHeader))
+			} else {
+				_, _, err = a.accounts.Authorize(id, r.Header.Get(CSRFHeader))
+			}
 		default:
 			w.Header().Set("Allow", "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE")
 			a.problem(w, r, http.StatusMethodNotAllowed, "MethodNotAllowed", "method is not supported")
@@ -42,14 +51,15 @@ func (a *API) Protect(next http.Handler) http.Handler {
 	})
 }
 
-// StripCredentials removes the operator cookies and the CSRF header before a request leaves the
-// gateway. Other cookies keep their original text; the caller's request is not modified. Informational
-// answers written through it, which a reverse proxy forwards without ModifyResponse, lose the Set-Cookie
-// lines of the operator cookies.
+// StripCredentials removes the operator cookies, the CSRF header and ActivityHeader before a request
+// leaves the gateway. Other cookies keep their original text; the caller's request is not modified.
+// Informational answers written through it, which a reverse proxy forwards without ModifyResponse, lose
+// the Set-Cookie lines of the operator cookies.
 func StripCredentials(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Clone()
 		header.Del(CSRFHeader)
+		header.Del(ActivityHeader)
 		header.Del("Cookie")
 		for _, line := range r.Header.Values("Cookie") {
 			var kept []string

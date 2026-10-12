@@ -75,15 +75,17 @@ func gatewayApp(t *testing.T, servingURL, warehouseURL, timeout string) http.Han
 // file, like a restarted gateway.
 func gatewayWith(t *testing.T, values map[string]string) http.Handler {
 	t.Helper()
-	cfg := loadConfig(t, values)
-	accounts, err := newAccounts(cfg.Operator)
+	return assemble(t, values).handler
+}
+
+// assemble builds the gateway's components from settings; the expiration runs are not started.
+func assemble(t *testing.T, values map[string]string) components {
+	t.Helper()
+	app, err := newComponents(loadConfig(t, values), log.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := newHandler(cfg, accounts, log.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(app.streams.Close)
 	return app
 }
 

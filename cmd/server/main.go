@@ -19,7 +19,10 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/config"
+	"github.com/JustIkra/umir-gateway/internal/expiration"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
+	"github.com/JustIkra/umir-gateway/internal/journal"
+	"github.com/JustIkra/umir-gateway/internal/live"
 	"github.com/JustIkra/umir-gateway/internal/operator"
 	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
@@ -28,8 +31,8 @@ import (
 func newToken() (string, error) { return rand.Text(), nil }
 
 // newAccounts opens the account file, creating it from the bootstrap settings only when it is absent,
-// and starts the operator account module.
-func newAccounts(cfg config.Operator) (*operator.Service, error) {
+// and starts the operator account module; observer, when set, hears about extended and ended sessions.
+func newAccounts(cfg config.Operator, observer operator.SessionObserver) (*operator.Service, error) {
 	hasher, err := argon2id.New(argon2id.Selected, rand.Reader)
 	if err != nil {
 		return nil, err
@@ -56,15 +59,65 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
 		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
 		FeedbackContextLimit: operator.DefaultFeedbackContextLimit, FeedbackProcessLimit: operator.DefaultFeedbackProcessLimit,
-		FeedbackWindow: operator.DefaultFeedbackWindow,
+		FeedbackWindow: operator.DefaultFeedbackWindow, Observer: observer,
 	})
 }
 
-// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
-// Each upstream is wrapped so operator credentials never reach it and it cannot set them.
-func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.Logger) (http.Handler, error) {
+// components are the parts of one gateway process: the HTTP handler, the change journal, the live
+// streams and the expiration runs.
+type components struct {
+	handler http.Handler
+	journal *journal.Journal
+	streams *live.Streams
+	expiry  *expiration.Runner
+}
+
+// newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
+// starts expiry itself.
+func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
+	events := live.NewSessionEvents()
+	accounts, err := newAccounts(cfg.Operator, events)
+	if err != nil {
+		return components{}, err
+	}
+	changes, err := journal.New(cfg.JournalCapacity, rand.Text, time.Now)
+	if err != nil {
+		return components{}, err
+	}
+	upstream := live.NewUpstream()
+	streams, err := live.NewStreams(live.Options{
+		Changes: changes, Upstream: upstream, Sessions: accounts, Events: events, Clock: live.SystemClock{},
+		PerSession: live.DefaultPerSession, Total: live.DefaultTotal, Ping: live.DefaultPing, WriteTimeout: live.DefaultWriteTimeout,
+	})
+	if err != nil {
+		return components{}, err
+	}
 	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
+	handler, err := newHandler(cfg, accounts, transport, changes, streams, logger)
+	if err != nil {
+		return components{}, err
+	}
+	expiry, err := expiration.New(expiration.Options{
+		Client: &http.Client{Transport: transport}, Warehouse: cfg.WarehouseURL, Interval: cfg.ExpirationRunInterval,
+		Timeout: cfg.UpstreamTimeout, Journal: changes, Upstream: upstream, NewTicker: newTicker, Logger: logger,
+	})
+	if err != nil {
+		return components{}, err
+	}
+	return components{handler: handler, journal: changes, streams: streams, expiry: expiry}, nil
+}
+
+func newTicker(d time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(d)
+	return ticker.C, ticker.Stop
+}
+
+// newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
+// Each upstream is wrapped so operator credentials never reach it and it cannot set them. Admitted
+// writes go to changes; GET /api/live is served by streams.
+func newHandler(cfg config.Config, accounts operatorhttp.Accounts, transport http.RoundTripper, changes *journal.Journal,
+	streams *live.Streams, logger *log.Logger) (http.Handler, error) {
 	proxy := func(target *url.URL) (http.Handler, error) {
 		proxy, err := httpupstream.NewProxy(target, transport)
 		if err != nil {
@@ -108,6 +161,12 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, logger *log.L
 		GuardFeedback: func(next http.Handler) http.Handler {
 			return withDeadline(api.GuardFeedback(next), cfg.UpstreamTimeout)
 		},
+		Record: func(method, path string, status int) {
+			changes.Append(journal.Entry{Source: journal.SourceRequest, Method: method, Path: path, Status: status, Outcome: journal.OutcomeOf(status)})
+		},
+		// The stream is not bounded by the upstream deadline: it stays open until the client, the
+		// session or the server ends it.
+		Live: api.GuardLive(streams.Serve),
 	})
 }
 
@@ -141,6 +200,19 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 }
 
 const shutdownGrace = 10 * time.Second
+
+// newServer serves app. Shutdown waits for idle connections, and a live stream never becomes idle, so
+// shutdown also ends the streams.
+func newServer(cfg config.Config, app components) *http.Server {
+	server := &http.Server{
+		Addr:              listenAddress(cfg),
+		Handler:           app.handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	server.RegisterOnShutdown(app.streams.Close)
+	return server
+}
 
 // listenAddress binds LISTEN_HOST: loopback for a process started by hand, all interfaces in the image.
 func listenAddress(cfg config.Config) string { return net.JoinHostPort(cfg.ListenHost, cfg.Port) }
@@ -205,20 +277,11 @@ func main() {
 		}
 		return
 	}
-	accounts, err := newAccounts(cfg.Operator)
+	app, err := newComponents(cfg, log.Default())
 	if err != nil {
 		log.Fatal(err)
 	}
-	app, err := newHandler(cfg, accounts, log.Default())
-	if err != nil {
-		log.Fatal(err)
-	}
-	server := &http.Server{
-		Addr:              listenAddress(cfg),
-		Handler:           app,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	server := newServer(cfg, app)
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	listener, err := net.Listen("tcp", server.Addr)
@@ -226,7 +289,16 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	if err := run(signals, server, listener, shutdownGrace); err != nil {
+	// The process owns the expiration runs: they stop with the signal and finish before it exits.
+	runs := make(chan struct{})
+	go func() {
+		defer close(runs)
+		app.expiry.Run(signals)
+	}()
+	err = run(signals, server, listener, shutdownGrace)
+	stop()
+	<-runs
+	if err != nil {
 		log.Fatal(err)
 	}
 }

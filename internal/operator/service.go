@@ -59,6 +59,8 @@ type Options struct {
 	FeedbackContextLimit int
 	FeedbackProcessLimit int
 	FeedbackWindow       time.Duration
+	// Observer, when set, hears about extended and ended sessions after each commit.
+	Observer SessionObserver
 }
 
 // Session is what the HTTP layer needs about an authenticated session. ID is the bearer token for the
@@ -96,6 +98,8 @@ type Service struct {
 	changeThrottle failureThrottle
 	// feedback holds the admitted feedback posts of the whole process.
 	feedback attempts
+	// events wait under mu for unlock to report them to the observer.
+	events []sessionEvent
 }
 
 // NewService starts from the persisted state. Stored sessions that expired or belong to an older
@@ -168,7 +172,7 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string,
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	if s.recovering {
 		return Profile{}, Session{}, ErrAuthUnavailable
 	}
@@ -185,6 +189,7 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string,
 	}
 	now := s.opts.Now()
 	next := maps.Clone(s.sessions)
+	replaced := previousID != "" && s.liveLocked(previousID, now) != nil
 	if previousID != "" {
 		delete(next, sessionDigest(previousID))
 	}
@@ -193,7 +198,7 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string,
 			delete(next, digest)
 		}
 	}
-	evictOldest(next, s.opts.MaxSessions-1)
+	evicted := evictOldest(next, s.opts.MaxSessions-1)
 	st := &session{rememberMe: rememberMe, credentialVersion: s.account.CredentialVersion, created: now, lastSeen: now}
 	st.expires = now.Add(s.opts.AbsoluteTimeout)
 	if rememberMe {
@@ -203,13 +208,19 @@ func (s *Service) Login(ctx context.Context, login, password, previousID string,
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
 		return Profile{}, Session{}, err
 	}
+	if replaced {
+		s.endedLocked(sessionDigest(previousID), EndSignedOut)
+	}
+	for _, digest := range evicted {
+		s.endedLocked(digest, EndRevoked)
+	}
 	s.throttle.failures = s.throttle.failures[:0]
 	return s.account.Profile(), s.view(token, st), nil
 }
 
 func (s *Service) Authenticate(id string) (Profile, Session, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	now := s.opts.Now()
 	st, err := s.activeLocked(id, now)
 	if err != nil {
@@ -222,7 +233,7 @@ func (s *Service) Authenticate(id string) (Profile, Session, error) {
 // A wrong token neither extends nor revokes the session.
 func (s *Service) Authorize(id, csrfToken string) (Profile, Session, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	now := s.opts.Now()
 	st, err := s.activeLocked(id, now)
 	if err != nil {
@@ -245,7 +256,20 @@ func (s *Service) refreshActivityLocked(id string, st *session, now time.Time) (
 	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
 		return Profile{}, Session{}, err
 	}
+	s.extendedLocked(id, &renewed)
 	return s.account.Profile(), s.view(id, &renewed), nil
+}
+
+// Peek checks session id the way Authenticate does, but neither extends it nor writes the store. Live
+// streams and background requests use it.
+func (s *Service) Peek(id string) (Profile, Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.activeLocked(id, s.opts.Now())
+	if err != nil {
+		return Profile{}, Session{}, err
+	}
+	return s.account.Profile(), s.view(id, st), nil
 }
 
 // Current returns the profile and session for the operator's own view. An ordinary session's renewed
@@ -253,7 +277,7 @@ func (s *Service) refreshActivityLocked(id string, st *session, now time.Time) (
 // store definitely failed, the session stays usable and the deadline the store holds is reported.
 func (s *Service) Current(id string) (Profile, Session, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	now := s.opts.Now()
 	st, err := s.activeLocked(id, now)
 	if err != nil {
@@ -276,6 +300,7 @@ func (s *Service) Current(id string) (Profile, Session, error) {
 		stored.lastSeen = st.storedLastSeen
 		return s.account.Profile(), s.view(id, &stored), nil
 	}
+	s.extendedLocked(id, &renewed)
 	return s.account.Profile(), s.view(id, &renewed), nil
 }
 
@@ -324,7 +349,7 @@ func (s *Service) verify(ctx context.Context, password, encoded string) (bool, e
 // not authoritative, so only a request without a session can succeed.
 func (s *Service) Logout(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlock()
 	if s.recovering {
 		if id == "" {
 			return nil
@@ -336,7 +361,11 @@ func (s *Service) Logout(id string) error {
 	}
 	next := maps.Clone(s.sessions)
 	delete(next, sessionDigest(id))
-	return s.commitLocked(s.account, next, sessionChange)
+	if err := s.commitLocked(s.account, next, sessionChange); err != nil {
+		return err
+	}
+	s.endedLocked(sessionDigest(id), EndSignedOut)
+	return nil
 }
 
 func (s *Service) newTokenLocked() (string, error) {
