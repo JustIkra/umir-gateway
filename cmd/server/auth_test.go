@@ -133,7 +133,7 @@ func TestInvalidBootstrapFailsWithoutEchoOrFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newAccounts(cfg.Operator); err == nil || strings.Contains(err.Error(), "c2VjcmV0") {
+	if _, err := newAccounts(cfg.Operator, nil); err == nil || strings.Contains(err.Error(), "c2VjcmV0") {
 		t.Fatalf("newAccounts error = %v", err)
 	}
 	if _, err := os.Stat(values["OPERATOR_STORE_PATH"]); !errors.Is(err, os.ErrNotExist) {

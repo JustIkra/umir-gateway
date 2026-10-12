@@ -28,12 +28,14 @@ type Routes struct {
 	// Record learns the status of each state-changing business request that passed Protect and of each
 	// display-name change: 0 when no upstream response arrived.
 	Record func(method, path string, status int)
+	// Live serves the exact path /api/live, the stream of change signals; it checks the session itself.
+	Live http.Handler
 }
 
 func NewRouter(routes Routes) (http.Handler, error) {
 	if routes.Serving == nil || routes.Warehouse == nil || routes.Operator == nil || routes.Protect == nil ||
-		routes.Feedback == nil || routes.GuardFeedback == nil || routes.NewRequestID == nil || routes.Record == nil {
-		return nil, errors.New("router requires serving, warehouse, operator, protect, feedback and its guard, request IDs and a recorder")
+		routes.Feedback == nil || routes.GuardFeedback == nil || routes.NewRequestID == nil || routes.Record == nil || routes.Live == nil {
+		return nil, errors.New("router requires serving, warehouse, operator, protect, feedback and its guard, request IDs, a recorder and the live stream")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
@@ -44,6 +46,7 @@ func NewRouter(routes Routes) (http.Handler, error) {
 	// Only the gateway's expiration scheduler starts runs; the browser never reaches the route.
 	mux.Handle("/api/warehouse/", hide("/api/warehouse/expiration-runs",
 		business("/api/warehouse", routes.Warehouse, routes.Protect, routes.Record)))
+	mux.Handle("/api/live", routes.Live)
 	// Only the exact path: other paths of the feedback service are never public.
 	mux.Handle("/api/feedback", routes.GuardFeedback(toFeedback(routes.Feedback)))
 	return WithRequestID(mux, routes.NewRequestID), nil

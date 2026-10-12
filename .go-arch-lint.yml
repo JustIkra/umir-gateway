@@ -20,6 +20,7 @@ components:
   operatorhttp: {in: "internal/operatorhttp/**"}
   strictjson: {in: "internal/strictjson/**"}
   journal: {in: "internal/journal/**"}
+  live: {in: "internal/live/**"}
 vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
@@ -38,7 +39,7 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, journal]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, journal, live]
     canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport]
@@ -58,3 +59,5 @@ deps:
     mayDependOn: [strictjson]
   journal:
     mayDependOn: [journal]
+  live:
+    mayDependOn: [live, operator, httpapi]

@@ -21,6 +21,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/journal"
+	"github.com/JustIkra/umir-gateway/internal/live"
 	"github.com/JustIkra/umir-gateway/internal/operator"
 	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
@@ -29,8 +30,8 @@ import (
 func newToken() (string, error) { return rand.Text(), nil }
 
 // newAccounts opens the account file, creating it from the bootstrap settings only when it is absent,
-// and starts the operator account module.
-func newAccounts(cfg config.Operator) (*operator.Service, error) {
+// and starts the operator account module; observer, when set, hears about extended and ended sessions.
+func newAccounts(cfg config.Operator, observer operator.SessionObserver) (*operator.Service, error) {
 	hasher, err := argon2id.New(argon2id.Selected, rand.Reader)
 	if err != nil {
 		return nil, err
@@ -57,19 +58,22 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
 		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
 		FeedbackContextLimit: operator.DefaultFeedbackContextLimit, FeedbackProcessLimit: operator.DefaultFeedbackProcessLimit,
-		FeedbackWindow: operator.DefaultFeedbackWindow,
+		FeedbackWindow: operator.DefaultFeedbackWindow, Observer: observer,
 	})
 }
 
-// components are the parts of one gateway process: the HTTP handler and the change journal.
+// components are the parts of one gateway process: the HTTP handler, the change journal and the live
+// streams.
 type components struct {
 	handler http.Handler
 	journal *journal.Journal
+	streams *live.Streams
 }
 
-// newComponents assembles the gateway from cfg.
+// newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler.
 func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
-	accounts, err := newAccounts(cfg.Operator)
+	events := live.NewSessionEvents()
+	accounts, err := newAccounts(cfg.Operator, events)
 	if err != nil {
 		return components{}, err
 	}
@@ -77,20 +81,27 @@ func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
-	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
-	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
-	handler, err := newHandler(cfg, accounts, transport, changes, logger)
+	streams, err := live.NewStreams(live.Options{
+		Changes: changes, Upstream: live.NewUpstream(), Sessions: accounts, Events: events, Clock: live.SystemClock{},
+		PerSession: live.DefaultPerSession, Total: live.DefaultTotal, Ping: live.DefaultPing, WriteTimeout: live.DefaultWriteTimeout,
+	})
 	if err != nil {
 		return components{}, err
 	}
-	return components{handler: handler, journal: changes}, nil
+	// Zero Proxy field: internal upstreams never go through HTTP_PROXY from the environment.
+	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
+	handler, err := newHandler(cfg, accounts, transport, changes, streams, logger)
+	if err != nil {
+		return components{}, err
+	}
+	return components{handler: handler, journal: changes, streams: streams}, nil
 }
 
 // newHandler assembles the gateway: one proxy per upstream behind the operator guard and the router.
 // Each upstream is wrapped so operator credentials never reach it and it cannot set them. Admitted
-// writes go to changes.
+// writes go to changes; GET /api/live is served by streams.
 func newHandler(cfg config.Config, accounts operatorhttp.Accounts, transport http.RoundTripper, changes *journal.Journal,
-	logger *log.Logger) (http.Handler, error) {
+	streams *live.Streams, logger *log.Logger) (http.Handler, error) {
 	proxy := func(target *url.URL) (http.Handler, error) {
 		proxy, err := httpupstream.NewProxy(target, transport)
 		if err != nil {
@@ -137,6 +148,9 @@ func newHandler(cfg config.Config, accounts operatorhttp.Accounts, transport htt
 		Record: func(method, path string, status int) {
 			changes.Append(journal.Entry{Source: journal.SourceRequest, Method: method, Path: path, Status: status, Outcome: journal.OutcomeOf(status)})
 		},
+		// The stream is not bounded by the upstream deadline: it stays open until the client, the
+		// session or the server ends it.
+		Live: api.GuardLive(streams.Serve),
 	})
 }
 
@@ -170,6 +184,19 @@ func withDeadline(next http.Handler, timeout time.Duration) http.Handler {
 }
 
 const shutdownGrace = 10 * time.Second
+
+// newServer serves app. Shutdown waits for idle connections, and a live stream never becomes idle, so
+// shutdown also ends the streams.
+func newServer(cfg config.Config, app components) *http.Server {
+	server := &http.Server{
+		Addr:              listenAddress(cfg),
+		Handler:           app.handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	server.RegisterOnShutdown(app.streams.Close)
+	return server
+}
 
 // listenAddress binds LISTEN_HOST: loopback for a process started by hand, all interfaces in the image.
 func listenAddress(cfg config.Config) string { return net.JoinHostPort(cfg.ListenHost, cfg.Port) }
@@ -238,12 +265,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := &http.Server{
-		Addr:              listenAddress(cfg),
-		Handler:           app.handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	server := newServer(cfg, app)
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	listener, err := net.Listen("tcp", server.Addr)

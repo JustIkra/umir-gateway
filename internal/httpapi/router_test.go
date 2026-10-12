@@ -18,14 +18,15 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // testRoutes guards with a stub that records what it protected and lets it through.
 type testRoutes struct {
-	serving, warehouse, operator, feedback *recordingHandler
-	guarded, feedbackGuarded, recorded     []string
+	serving, warehouse, operator, feedback, live *recordingHandler
+	guarded, feedbackGuarded, recorded           []string
 }
 
 func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
 	t.Helper()
 	routes := &testRoutes{
 		serving: &recordingHandler{}, warehouse: &recordingHandler{}, operator: &recordingHandler{}, feedback: &recordingHandler{},
+		live: &recordingHandler{},
 	}
 	router, err := NewRouter(Routes{
 		Serving: routes.serving, Warehouse: routes.warehouse, Operator: routes.operator, Feedback: routes.feedback,
@@ -45,6 +46,7 @@ func newTestRouter(t *testing.T) (*testRoutes, http.Handler) {
 		Record: func(method, path string, status int) {
 			routes.recorded = append(routes.recorded, fmt.Sprintf("%s %s %d", method, path, status))
 		},
+		Live: routes.live,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,13 +64,14 @@ func TestNewRouterRequiresEveryRoute(t *testing.T) {
 		"feedback":       func(r *Routes) { r.Feedback = nil },
 		"feedback guard": func(r *Routes) { r.GuardFeedback = nil },
 		"recorder":       func(r *Routes) { r.Record = nil },
+		"live":           func(r *Routes) { r.Live = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			pass := func(next http.Handler) http.Handler { return next }
 			routes := Routes{
 				Serving: &recordingHandler{}, Warehouse: &recordingHandler{}, Operator: &recordingHandler{},
 				Feedback: &recordingHandler{}, Protect: pass, GuardFeedback: pass, NewRequestID: func() string { return "" },
-				Record: func(string, string, int) {},
+				Record: func(string, string, int) {}, Live: &recordingHandler{},
 			}
 			drop(&routes)
 			if _, err := NewRouter(routes); err == nil {
@@ -150,6 +153,7 @@ func TestRouterRejectedRequestNeverReachesUpstream(t *testing.T) {
 		},
 		NewRequestID: func() string { return "req-1" },
 		Record:       func(string, string, int) { t.Error("a rejected request was recorded") },
+		Live:         &recordingHandler{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,5 +240,19 @@ func TestRouterSendsOnlyTheExactFeedbackPathThroughItsGuard(t *testing.T) {
 		if routes.feedback.request != nil || len(routes.feedbackGuarded) != 0 || response.Code != http.StatusNotFound {
 			t.Errorf("%s reached feedback: %d", target, response.Code)
 		}
+	}
+}
+
+func TestRouterSendsOnlyTheExactLivePathToTheStream(t *testing.T) {
+	routes, router := newTestRouter(t)
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/live", nil))
+	if routes.live.request == nil || len(routes.guarded) != 0 {
+		t.Fatalf("live: %v, business guard: %v", routes.live.request != nil, routes.guarded)
+	}
+	routes.live.request = nil
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/live/other", nil))
+	if routes.live.request != nil || response.Code != http.StatusNotFound {
+		t.Fatalf("/api/live/other: %d, reached the stream: %v", response.Code, routes.live.request != nil)
 	}
 }
