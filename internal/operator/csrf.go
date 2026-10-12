@@ -11,6 +11,8 @@ import (
 type anonymousContext struct {
 	token   string
 	created time.Time
+	// feedback holds the feedback posts admitted with this context's token.
+	feedback attempts
 }
 
 // AnonymousCSRF returns the token of pre-auth context id, creating a new context when id is unknown
@@ -57,11 +59,19 @@ func (s *Service) DiscardAnonymous(id string) {
 func (s *Service) SessionCSRF(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st, ok := s.sessions[sessionDigest(id)]
-	if !ok || id == "" || s.expired(st, s.opts.Now()) || st.credentialVersion != s.account.CredentialVersion {
+	if s.liveLocked(id, s.opts.Now()) == nil {
 		return "", false
 	}
 	return sessionCSRF(id), true
+}
+
+// liveLocked returns the live session of id without touching it, or nil.
+func (s *Service) liveLocked(id string, now time.Time) *session {
+	st, ok := s.sessions[sessionDigest(id)]
+	if !ok || id == "" || s.expired(st, now) || st.credentialVersion != s.account.CredentialVersion {
+		return nil
+	}
+	return st
 }
 
 // MatchToken compares tokens in constant time; an empty token never matches.

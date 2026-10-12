@@ -149,7 +149,8 @@ func newFixture(t *testing.T, change func(*Options)) fixture {
 		MaxAnonymous: DefaultMaxAnonymous, AnonymousTTL: DefaultAnonymousTTL,
 		MaxVerifications: DefaultMaxVerifications, MaxQueuedLogins: DefaultMaxQueuedLogins,
 		FailureLimit: DefaultFailureLimit, FailureWindow: DefaultFailureWindow, Cooldown: DefaultCooldown,
-		RememberTimeout: DefaultRememberTimeout,
+		RememberTimeout: DefaultRememberTimeout, FeedbackContextLimit: DefaultFeedbackContextLimit,
+		FeedbackProcessLimit: DefaultFeedbackProcessLimit, FeedbackWindow: DefaultFeedbackWindow,
 	}
 	if change != nil {
 		change(&opts)

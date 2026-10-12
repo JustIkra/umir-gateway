@@ -106,7 +106,8 @@ func newFixture(t *testing.T, mode CookieMode, origin string) *fixture {
 		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
 		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
-		RememberTimeout: operator.DefaultRememberTimeout,
+		RememberTimeout: operator.DefaultRememberTimeout, FeedbackContextLimit: operator.DefaultFeedbackContextLimit,
+		FeedbackProcessLimit: operator.DefaultFeedbackProcessLimit, FeedbackWindow: operator.DefaultFeedbackWindow,
 	})
 	if err != nil {
 		t.Fatal(err)

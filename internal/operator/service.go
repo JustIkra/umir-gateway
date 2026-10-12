@@ -54,6 +54,11 @@ type Options struct {
 	FailureLimit  int
 	FailureWindow time.Duration
 	Cooldown      time.Duration
+	// The public feedback form admits FeedbackContextLimit posts per CSRF context and
+	// FeedbackProcessLimit posts in total within a rolling FeedbackWindow.
+	FeedbackContextLimit int
+	FeedbackProcessLimit int
+	FeedbackWindow       time.Duration
 }
 
 // Session is what the HTTP layer needs about an authenticated session. ID is the bearer token for the
@@ -90,6 +95,8 @@ type Service struct {
 	// throttle limits failed logins; changeThrottle limits wrong current passwords in password changes.
 	throttle       failureThrottle
 	changeThrottle failureThrottle
+	// feedback holds the admitted feedback posts of the whole process.
+	feedback attempts
 }
 
 // NewService starts from the persisted state. Stored sessions that expired or belong to an older
@@ -100,7 +107,8 @@ func NewService(state State, opts Options) (*Service, error) {
 	}
 	if opts.IdleTimeout <= 0 || opts.AbsoluteTimeout <= 0 || opts.RememberTimeout <= 0 || opts.MaxSessions <= 0 ||
 		opts.MaxAnonymous <= 0 || opts.AnonymousTTL <= 0 || opts.MaxVerifications <= 0 || opts.MaxQueuedLogins <= 0 ||
-		opts.FailureLimit <= 0 || opts.FailureWindow <= 0 || opts.Cooldown <= 0 {
+		opts.FailureLimit <= 0 || opts.FailureWindow <= 0 || opts.Cooldown <= 0 ||
+		opts.FeedbackContextLimit <= 0 || opts.FeedbackProcessLimit <= 0 || opts.FeedbackWindow <= 0 {
 		return nil, errors.New("operator: session timeouts and bounds must be positive")
 	}
 	if err := ValidateState(state); err != nil {

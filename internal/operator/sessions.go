@@ -30,6 +30,8 @@ type session struct {
 	storedLastSeen time.Time
 	// expires is the absolute deadline fixed at login.
 	expires time.Time
+	// feedback holds the feedback posts admitted with this session's token; it is never stored.
+	feedback attempts
 }
 
 // sessionDigest identifies a session in memory and in the store.

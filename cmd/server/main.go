@@ -55,6 +55,8 @@ func newAccounts(cfg config.Operator) (*operator.Service, error) {
 		AnonymousTTL: operator.DefaultAnonymousTTL, MaxVerifications: operator.DefaultMaxVerifications,
 		MaxQueuedLogins: operator.DefaultMaxQueuedLogins, FailureLimit: operator.DefaultFailureLimit,
 		FailureWindow: operator.DefaultFailureWindow, Cooldown: operator.DefaultCooldown,
+		FeedbackContextLimit: operator.DefaultFeedbackContextLimit, FeedbackProcessLimit: operator.DefaultFeedbackProcessLimit,
+		FeedbackWindow: operator.DefaultFeedbackWindow,
 	})
 }
 
