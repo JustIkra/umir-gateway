@@ -72,44 +72,57 @@ func (a *API) admitOrigin(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // decode reads exactly one JSON object into dst. It answers 415, 413 or 400 and returns false when
-// the body is not one. Invalid UTF-8 and unpaired surrogate escapes are rejected before decoding,
-// because encoding/json would silently turn them into U+FFFD.
+// the body is not one.
 func (a *API) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
+	body, ok := a.readJSON(w, r, maxBody)
+	if !ok {
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(dst)
+	if err == nil {
+		if extra := decoder.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
+			err = extra
+			if err == nil {
+				err = errors.New("data after the JSON object")
+			}
+		}
+	}
+	if err != nil {
+		a.problem(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not the expected JSON object")
+		return false
+	}
+	return true
+}
+
+// readJSON reads an application/json body of at most limit bytes. It answers 415, 413 or 400 and
+// returns false otherwise. Invalid UTF-8 and unpaired surrogate escapes are rejected here, because
+// encoding/json would silently turn them into U+FFFD.
+func (a *API) readJSON(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
 		a.problem(w, r, http.StatusUnsupportedMediaType, "UnsupportedMediaType", "send the body as application/json")
-		return false
+		return nil, false
 	}
 	// A request without a body has nothing to bound, and the server already reads its connection.
 	if r.Body != http.NoBody {
 		if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			a.fail(w, r, fmt.Errorf("body read deadline: %w", err), "")
-			return false
+			return nil, false
 		}
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err == nil {
 		err = strictjson.CheckText(body)
-	}
-	if err == nil {
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.DisallowUnknownFields()
-		if err = decoder.Decode(dst); err == nil {
-			if extra := decoder.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
-				err = extra
-				if err == nil {
-					err = errors.New("data after the JSON object")
-				}
-			}
-		}
 	}
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooLarge):
 		a.problem(w, r, http.StatusRequestEntityTooLarge, "PayloadTooLarge", "request body is too large")
-		return false
+		return nil, false
 	case err != nil:
 		a.problem(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not the expected JSON object")
-		return false
+		return nil, false
 	}
-	return true
+	return body, true
 }

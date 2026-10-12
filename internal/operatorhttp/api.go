@@ -37,6 +37,8 @@ type Accounts interface {
 	Logout(id string) error
 	UpdateDisplayName(id, raw string) (operator.Profile, error)
 	ChangePassword(ctx context.Context, id, current, next string) error
+	// AdmitFeedback checks and counts a public feedback post; it extends no session.
+	AdmitFeedback(sessionID, anonymousID, csrfToken string) error
 }
 
 // CookieMode selects cookie names and the Secure attribute; configuration checks it against the origin.

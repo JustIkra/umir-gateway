@@ -84,6 +84,7 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 	var field *operator.FieldError
 	var limited *operator.RateLimitError
 	var changeLimited *operator.PasswordChangeLimitError
+	var feedbackLimited *operator.FeedbackLimitError
 	switch {
 	case errors.As(err, &field) && invalid != "":
 		a.reject(w, r, http.StatusUnprocessableEntity, httpapi.Problem{
@@ -103,6 +104,9 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, err error, invalid st
 			Code: "PasswordChangeRateLimited", Message: "too many wrong current passwords; password changes are paused",
 			SessionRevoked: &revoked,
 		})
+	case errors.As(err, &feedbackLimited):
+		w.Header().Set("Retry-After", strconv.Itoa(int(feedbackLimited.RetryAfter/time.Second)))
+		a.problem(w, r, http.StatusTooManyRequests, "FeedbackRateLimited", "too many feedback posts")
 	case errors.Is(err, operator.ErrInvalidCredentials):
 		w.Header().Set("WWW-Authenticate", challenge)
 		a.problem(w, r, http.StatusUnauthorized, "InvalidCredentials", "login or password is incorrect")
