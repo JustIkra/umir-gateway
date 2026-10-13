@@ -555,6 +555,10 @@ Preserve unrelated local edits, stage reviewed paths and check `git diff --cache
 
 ### Scoped due-expiry scheduler and private runtime (G5)
 
+Private runtime status uses the last validated Auth registry projection and the local registration table. It performs no synchronous call to Auth. A missing projection, failed later read, clock reversal or age of five seconds makes readiness false. Registry reads from the scheduler and registration path refresh the projection. Later-started reads take precedence over earlier completions, and callers receive independent copies.
+
+Each restaurant must have the matching local lifecycle version; deleting scopes and tombstones must be closed locally. Status does not require Auth to echo Gateway's own acknowledgment back before reporting that local registration is ready. Auth reads this status while reconciling and recording that acknowledgment. Restaurant commands still require fresh Auth authorization, and registration still checks fresh Auth state and signed control claims.
+
 Gateway is the sole scheduled expiry owner. In Auth mode it polls immediately
 after process start, then at `EXPIRATION_RUN_INTERVAL` (default `1s`). One process
 goroutine owns all runs; a slow run delays later ticks and never overlaps them.
@@ -587,7 +591,7 @@ browser requests, and source-controlled environment files.
 
 The private surface is `GET /internal/gateway/v2/runtime` and
 `PUT|DELETE /internal/gateway/v2/r/{restaurantID}/registry`. Status reports the
-current Gateway UUID epoch, reconciliation readiness, and packaged Go 1.26.9
+current Gateway UUID epoch, local reconciliation readiness from the bounded registry projection, and packaged Go 1.26.9
 tzdata identity. Mutation additionally verifies the Auth Ed25519 signature,
 60-second lifetime, exact Gateway audience, Auth caller, restaurant, epoch,
 lifecycle version, and register/close permission. Registration checks fresh Auth

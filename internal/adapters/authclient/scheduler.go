@@ -11,13 +11,16 @@ import (
 )
 
 func (c *Client) Registry(ctx context.Context) (expiration.Registry, error) {
+	sequence := c.registry.begin()
 	var result expiration.Registry
 	err := c.scopeExchange(ctx, http.MethodGet, "/registry", nil, "Registry", &result)
 	if err == nil {
 		if validateErr := result.Validate(); validateErr != nil {
+			c.registry.store(sequence, expiration.Registry{}, c.now(), false)
 			return expiration.Registry{}, scopeUnavailable(validateErr)
 		}
 	}
+	c.registry.store(sequence, result, c.now(), err == nil && result.Complete)
 	return result, err
 }
 func (c *Client) ServiceToken(ctx context.Context, input expiration.ServiceRequest) (expiration.Credential, error) {

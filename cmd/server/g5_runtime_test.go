@@ -52,6 +52,39 @@ func TestG5PrivateRuntimeNeedsSeparateAuthIdentity(t *testing.T) {
 	}
 }
 
+func TestG5RuntimeStatusDoesNotCallAuthRegistry(t *testing.T) {
+	var calls atomic.Int64
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer peer.Close()
+	cfg := loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin})
+	app, err := newComponents(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/internal/gateway/v2/runtime", nil)
+	request.Header.Set("X-Umir-Service-Key", "auth-runtime-key")
+	response := httptest.NewRecorder()
+	app.privateHandler.ServeHTTP(response, request)
+	var status struct {
+		Service       string `json:"service"`
+		Epoch         string `json:"epoch"`
+		Ready         bool   `json:"ready"`
+		TZDataVersion string `json:"tzdataVersion"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || status.Service != "gateway" || status.Epoch == "" || status.Ready || status.TZDataVersion != "go1.26.9" {
+		t.Fatalf("status without a validated Auth snapshot: status %d, ready %v", response.Code, status.Ready)
+	}
+	if count := calls.Load(); count != 0 {
+		t.Fatalf("runtime status called Auth %d times", count)
+	}
+}
+
 func TestG5RuntimeRegisterCloseAndTombstone(t *testing.T) {
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

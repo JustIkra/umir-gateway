@@ -20,6 +20,7 @@ import (
 type RuntimeAuth interface {
 	ControlToken(context.Context, string) (ServiceClaims, error)
 	Registry(context.Context) (expiration.Registry, error)
+	RegistrySnapshot() (expiration.Registry, bool)
 }
 type RuntimeOptions struct {
 	Auth                             RuntimeAuth
@@ -64,7 +65,7 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Epoch   string `json:"epoch"`
 			Ready   bool   `json:"ready"`
 			TZData  string `json:"tzdataVersion"`
-		}{"gateway", g.opts.Epoch, g.ready(r.Context()), g.opts.TZDataVersion})
+		}{"gateway", g.opts.Epoch, g.ready(), g.opts.TZDataVersion})
 		return
 	}
 	prefix := "/internal/gateway/v2/r/"
@@ -218,6 +219,36 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Version      string `json:"lifecycleVersion"`
 	}{tenant, "gateway", g.opts.Epoch, state, input.Version})
 }
+
+func (g *GatewayRuntime) ready() bool {
+	registry, current := g.opts.Auth.RegistrySnapshot()
+	if !current || !registry.Complete {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, entry := range registry.Entries {
+		local, ok := g.entries[entry.Restaurant.RestaurantID]
+		if !ok {
+			return false
+		}
+		if entry.Restaurant.Lifecycle == "deleting" || entry.Restaurant.Lifecycle == "deleted" {
+			if !local.closed {
+				return false
+			}
+			continue
+		}
+		if local.closed || strconv.FormatInt(local.version, 10) != entry.Restaurant.LifecycleVersion {
+			return false
+		}
+	}
+	for _, tombstone := range registry.Tombstones {
+		if local, ok := g.entries[tombstone.RestaurantID]; !ok || !local.closed {
+			return false
+		}
+	}
+	return true
+}
 func runtimeFailure(w http.ResponseWriter, status int, code, outcome string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -233,45 +264,4 @@ func runtimeJSON(w http.ResponseWriter, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		return
 	}
-}
-
-func (g *GatewayRuntime) ready(parent context.Context) bool {
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-	defer cancel()
-	registry, err := g.opts.Auth.Registry(ctx)
-	if err != nil || !registry.Complete {
-		return false
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, e := range registry.Entries {
-		local, ok := g.entries[e.Restaurant.RestaurantID]
-		if !ok {
-			return false
-		}
-		if e.Restaurant.Lifecycle == "deleting" || e.Restaurant.Lifecycle == "deleted" {
-			if !local.closed {
-				return false
-			}
-			continue
-		}
-		if local.closed || strconv.FormatInt(local.version, 10) != e.Restaurant.LifecycleVersion {
-			return false
-		}
-		found := false
-		for _, peer := range e.Services {
-			if peer.Service == "gateway" && peer.RestaurantID == e.Restaurant.RestaurantID && peer.Epoch == g.opts.Epoch && peer.State == "ready" && peer.LifecycleVersion == e.Restaurant.LifecycleVersion {
-				found = true
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	for _, t := range registry.Tombstones {
-		if local, ok := g.entries[t.RestaurantID]; !ok || !local.closed {
-			return false
-		}
-	}
-	return true
 }

@@ -38,6 +38,7 @@ type Client struct {
 	keys             map[string]ed25519.PublicKey
 	keysAt           time.Time
 	unknownRefreshed bool
+	registry         registryCache
 }
 
 func New(opts Options) (*Client, error) {
