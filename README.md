@@ -6,7 +6,226 @@
 
 Работают `GET /healthz`, проверка контейнера `/server healthcheck`, HTTP-прокси, [личный кабинет оператора](#личный-кабинет-оператора) и [поток изменений `GET /api/live`](#реальное-время).
 Бизнес-маршруты требуют сессию оператора. Без сессии доступны только `GET` и `HEAD` для `/healthz`, `/api/serving/healthz` и `/api/warehouse/healthz`, а также публичная [форма обратной связи](#форма-обратной-связи) `POST /api/feedback`.
-Gateway не содержит бизнес-правил: он не создаёт `commandID`, не проверяет тела и не повторяет запросы.
+Gateway не содержит бизнес-правил: он не создаёт бизнес-`commandID` и не повторяет запросы. Backend v2 проверяет wire-схемы на границе, а бизнес-решения остаются у сервисов.
+
+### Realtime defect repairs (G3)
+
+The legacy expiration runner compares Warehouse versions with the last request that
+signalled a possible change. Rejected writes remain in the journal but do not hide
+an external expiration. A valid reply requires evaluatedAt, a canonical nonnegative
+int64 decimal stateVersion, and an explicit expired array with complete results.
+Replies are limited to 1 MiB and reject unknown fields and trailing JSON. Invalid
+replies keep the existing unknown signal and three-failure availability policy.
+
+Legacy operator callbacks carry process-local revisions assigned under the commit
+mutex. Stream watchers retain the highest revision even after sending it and ignore
+older or duplicate callbacks. Authoritative session snapshots also advance this
+revision cutoff before the greeting and after deadline checks. A delayed callback
+from before the watch cannot replace a newer snapshot. An ended watcher cannot be extended again. These
+revisions do not replace Auth session revisions or change stored expiry instants.
+
+Each journal path retains at most 1024 bytes, ending at a UTF-8 boundary. Gateway
+copies even short path slices so they cannot retain a larger request buffer. Proxy
+requests keep their original paths. With JOURNAL_CAPACITY entries, retained path
+content is bounded by JOURNAL_CAPACITY times 1024 bytes.
+
+Run focused verification with GOWORK=off go test -race -count=1
+./internal/expiration/... ./internal/live/... ./internal/journal/... . Full make
+check includes the operator publication and HTTP/SSE regressions. Backend v2 scoped
+SSE and scheduler integration use the frozen C2 contract.
+
+### Backend v2 Auth transport (G1)
+
+The internal Auth client accepts `authclient.Options.Now` for token validation
+and signing-key refresh. If omitted, it uses the system clock. A composition with
+an authoritative injected clock must pass that same clock here. Control-token
+validation rechecks expiry after key discovery. Scheduler-token validation uses
+one clock sample after the real Auth response. Network deadlines remain bounded
+host timers. No fixture controls, fixture data, or signing mechanism are added to
+production source.
+
+Set `AUTH_URL` to select the backend v2 topology. Gateway then uses Auth's private
+`/internal/auth/v1/public/*` session/profile facade. `AUTH_SERVICE_KEY` is required;
+`AUTH_TIMEOUT` defaults to `5s`. The URL is an origin without user information, a
+path, query or fragment. HTTPS uses normal certificate and hostname validation.
+Plain HTTP is allowed on loopback, or with `AUTH_ISOLATED_TEST_NETWORK=true` in an
+isolated synthetic test network. Keep the credential private. Gateway does not
+use environment HTTP proxies for this connection.
+
+Keep `OPERATOR_COOKIE_MODE` and `OPERATOR_PUBLIC_ORIGIN`. Auth mode does not open,
+create or write `OPERATOR_STORE_PATH`, use bootstrap credentials, or hold an Auth
+signing key. Auth owns durable accounts, CSRF, session activity and revocation.
+An unavailable Auth never invokes the legacy account module. `clear-sessions` is
+a legacy-only command. Without `AUTH_URL`, the selected legacy topology described
+below retains its existing local account, proxy, SSE and scheduler behavior.
+
+G1 exposes `/api/operator/csrf`, `/session`, `/me`, `/me/display-name`, and
+`/me/password` under the operator prefix, with their existing request bodies,
+response keys, errors and cookie policy. Equivalent `/api/v2` account routes use
+the frozen User models. V2 login, display-name and password mutations require the
+caller's `commandID`; Gateway preserves it. Old operator aliases receive a fresh
+private command ID per mutation. They retain their old recovery limitations:
+Gateway does not automatically retry an uncertain mutation or claim that a later
+alias request can recover the original session. V2 clients retain the original
+command ID and payload for owner-controlled recovery.
+
+Unsafe routes require the exact single Origin and `X-CSRF-Token`; Auth also checks
+the token's session/preauth binding. Browser internal credentials are rejected.
+Gateway builds private headers itself and never forwards browser cookies or Auth
+response headers. Only validated, successful SessionIssued/PreauthIssued results
+install cookies. Optional `User.email` values must match the frozen email format
+and contain at most 254 characters. Invalid Auth user results return 503 without
+installing cookies; mutation outcomes remain unknown. Unknown login, password,
+profile and logout outcomes set or clear no success cookie. Definite password-limit
+revocation preserves `sessionRevoked`
+and `Retry-After`. Private tokens, secrets and bodies are not logged or included
+in public JSON. Every account response is `no-store`. Exact background activity
+and CSRF requests do not extend idle time. Auth remains responsible for the
+persisted deadline and `/me` definite-extension-failure behavior.
+
+In Auth mode the old unscoped business routes and `/api/live` return
+`400 InvalidArgument` without dispatch. Auth mode runs the scoped SSE handler and
+the Auth-issued scheduler. It does not start the legacy scheduler or streams.
+Real five-service acceptance belongs to J1/E.
+
+Verify G1 with `GOWORK=off go test -race ./internal/operatorhttp/...
+./internal/adapters/... ./cmd/server/... ./tests/integration/...` (one command).
+The integration directory uses only Auth HTTP transport doubles. Run `make check`
+for the full pinned module gates and `make quality-test` after enforcement changes.
+
+### Backend v2 restaurant authorization (G2)
+
+Auth mode requires `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY`, and
+`FEEDBACK_SERVICE_KEY` in addition to the Auth credential. Configure the three
+service URLs as private listener origins with no path, query, fragment, or user
+information. Normal HTTPS certificate and hostname checks apply. Plain HTTP is
+limited to loopback or the isolated synthetic test network described above. The
+legacy topology retains its existing listener configuration.
+
+Business routes use `/api/v2/r/{restaurantID}/warehouse/*` and
+`/api/v2/r/{restaurantID}/serving/*`. The restaurant ID must be a canonical UUIDv4.
+Only frozen contract operations are public. Gateway maps each operation to its
+required capability and fixed audiences. Serving receives Serving and Warehouse
+audiences for authorized consumer calls. This does not expose consumer paths to
+the browser or grant public stock/writeoff access. Every dispatch obtains a fresh
+Auth decision. Unavailable, revoked, or inconsistent authorization blocks dispatch.
+
+Unsafe requests need the exact single Origin and CSRF header. Gateway compares
+the token with Auth's current session/preauth CSRF result before requesting the
+business token. Business requests install no success cookie. Gateway rejects
+browser internal credentials and removes browser identity, role, tenant, cookie,
+CSRF, and activity headers before dispatch. It supplies the Auth-issued bearer
+token and configured peer key. A declared `X-Umir-Runtime-Epoch` is the original
+command epoch and is validated, then preserved. No body, query override, header,
+wildcard, or default restaurant assigns a scope.
+
+The embedded `internal/httpapi/scoped-contract.json` contains 30 operation mappings
+and 130 referenced schemas selected unchanged from C2 contract
+`2.0.0-draft.2`, identity
+`sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6`.
+Inputs reject unknown/duplicate keys, nulls, trailing JSON, invalid text, duplicate
+query values, and raw semicolon separators. Business bodies are limited to 1 MiB;
+Feedback bodies to 16 KiB. Ordinary business bodies and raw query strings retain
+their exact bytes after validation. Current Auth settings do not replace a saved
+command's settings or reject retained retries in Gateway. The business owner
+resolves the original command and epoch before applying fresh-form settings checks.
+Validated replies retain exact decimal strings and original instants. Wrong scope,
+malformed replies, and transport failures fail closed. A lost modifying reply
+remains unknown; Gateway does not retry or generate another command.
+Serving resolution replies must match the saved `runtimeEpoch` query. A mismatched
+successful reply becomes unavailable; an authoritative `RuntimeReset` remains
+indeterminate. Scope-bearing error details must identify the authorized restaurant
+or its organization. Auth rate-limit refusals preserve retryability, retry details,
+and the validated `Retry-After` delay through both CSRF and authorization checks.
+
+`POST /api/v2/r/{restaurantID}/feedback` wraps the original submission values with
+Auth-verified User/org/restaurant context for Feedback. The anonymous endpoint
+`POST /api/v2/feedback/anonymous` stays unscoped even when cookies are present and
+uses a separate Auth-issued anonymous token. Scoped reads and exports check the
+reply tenant and every saved item's scope. Feedback owns durable namespaces,
+fingerprints, exact retries, and delivery jobs; Gateway stores no feedback state.
+
+`GET /api/v2/orgs/{orgID}/analytics/summary` requires own-org Admin access for every
+explicit `restaurantID` before any report dispatch. Supply one to 100 distinct
+restaurant IDs and `expectedSettingsVersion`. Gateway requests separate stock and
+movement reports and follows all pages within a five-second budget per restaurant.
+Page context, identity, settings, cutoff/period, and coverage must remain identical
+within each report. Duplicate/unordered rows, empty continuing pages, repeated
+cursors, drift, and unavailable pages make that restaurant unavailable. Complete
+arrays omit the cursor and can exceed 500 rows. No quantities or units are summed.
+Each report has a 32 MiB aggregate response budget and each peer response is bounded
+to 8 MiB; exceeding a budget is explicit unavailable rather than truncation. The
+response preserves restaurant input order and returns `complete`, `partial`, or
+`unavailable`. An unavailable restaurant never becomes a zero report. The two
+reports retain their own versions and observation times.
+
+Verify G2 with `GOWORK=off go test -race -count=1 ./internal/httpapi/...
+./internal/adapters/... ./cmd/server/...` (one command), then `make check` and
+`make quality-test`. G2 tests use synthetic Auth and business HTTP peers. Scheduled
+expiry is described below. Runtime acceptance requires the real five-service
+J1/E assembly.
+
+### Scoped live streams
+
+In Auth mode, `GET /api/v2/r/{restaurantID}/live` serves the frozen C2 SSE contract.
+Use the session cookie and optional `cursor` query parameter. A reconnect may use
+`Last-Event-ID` instead. Supplying both, duplicate query parameters, internal
+credentials, or a noncanonical restaurant ID is rejected before streaming.
+An unknown, modified, cross-restaurant, or cross-session cursor returns 403 and
+replays no event bytes. Cursors are bound to the session digest; another device
+session must start a fresh connection even when it belongs to the same User.
+
+Each SSE event name equals its JSON `type`. `change` includes tenantID, Gateway
+epoch, an exact decimal sequence string, and invalidated topics. Only changes have
+an opaque SSE id. A connection without a cursor, an expired cursor, an overwritten
+journal prefix, or a changed runtime generation receives `refresh-required` with
+the current Gateway epoch. Start a new read to obtain current business data.
+Auth checks run before every event and heartbeat. Idle checks run every four
+physical seconds from the start of the latest Auth check, with a one-second Auth
+budget inside the five-second cutoff window. Greeting, refresh, replay, change, and
+heartbeat writes and flushes share the remaining four-second budget. A stalled
+write closes the stream at that deadline; a terminal access-ended write has at most
+one second. Initial emission does not postpone the next idle check. No SSE call,
+comment, or check extends the session or mints a JWT.
+
+Revocation, deletion, expiry, and unknown/unavailable Auth outcomes emit one
+`access-ended` with reason revoked, deleted, session-expired, or auth-unavailable,
+then close the stream. A deleted journal cannot be revived. Neighboring restaurant
+streams and the global User session remain independent. The scoped stream consumes
+current Auth results directly; it does not subscribe to legacy deadline callbacks.
+
+Journals retain at most JOURNAL_CAPACITY changes per restaurant and 10,000 scoped
+contexts. Invalidation is conservative: possible/unknown business mutations and
+explicit committed Warehouse read preparation invalidate the authenticated
+restaurant's catalog, stock, menu, orders, and analytics. Definite rejected writes
+without committed-preparation metadata do not invalidate. Summary preparation
+uses the same publication path. Committed response status and headers survive
+interrupted, oversized, and close-failed bodies; both direct reads and summaries
+publish before returning unavailable. Partial response bodies are discarded and
+Gateway does not repeat the request. Validated Warehouse/Serving epoch changes reset
+only that restaurant's journal generation and signal refresh.
+
+Gateway creates a new UUID epoch on restart. Cursor positions use authenticated
+AES-GCM encryption with a random nonce and a domain-separated key derived from
+the existing private Gateway-to-Auth transport secret. The cursor includes only a
+session digest, scope, epoch, sequence/generation, and a five-minute deadline;
+no raw cookie or service JWT is included. A valid cursor from a previous Gateway
+epoch remains scope/session-bound and causes refresh, never old replay. Secret
+rotation invalidates old cursors; reconnect with current authorization and no
+cursor. The in-memory cursor cache holds at most 4096 positions; cursor input is
+bounded to 1024 bytes. Gateway does not add an Auth signing key or durable store.
+
+Streams are limited to eight per session and 64 per process. A rejected admission
+returns 429 RateLimited with a one-second Retry-After hint. Every write has a five-second deadline. Shutdown
+cancels Auth checks, removes subscriptions, stops timers, and waits for stream
+owners to finish. The legacy topology retains its original stream implementation.
+
+Verify G4 with `GOWORK=off go test -race -count=1 ./internal/live/...
+./internal/journal/... ./internal/httpapi/...` (one command). The regression suite
+also covers real loopback HTTP streams, restart cursors, and publication through
+the public scoped routes, using synthetic Auth/business transports. Run
+`make check` for the complete suite. Real Auth lifecycle/readiness, the scheduler,
+and the five-service assembly are verified at the J1/E handoff.
 
 | Входной путь | Путь на upstream |
 | --- | --- |
@@ -333,3 +552,199 @@ Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and [
 Release repositories independently. Use annotated `vX.Y.Z` tags for actual releases; published nested Go modules prefix tags with the logical module subdirectory (excluding a trailing major-version directory), and Go v2+ needs the matching major import path. Published tags/versions stay immutable. Record changes under Unreleased before releasing. Preserve Umir `sha-<full-SHA>` image identities and exact factory component pins; SemVer does not replace them with `latest`. API versions and service releases are separate.
 
 Preserve unrelated local edits, stage reviewed paths and check `git diff --cached` and `git diff --check`. Tagging, publishing and shared-history rewrites require the corresponding user instruction. This standard does not create a release or change the current version.
+
+### Scoped due-expiry scheduler and private runtime (G5)
+
+Gateway is the sole scheduled expiry owner. In Auth mode it polls immediately
+after process start, then at `EXPIRATION_RUN_INTERVAL` (default `1s`). One process
+goroutine owns all runs; a slow run delays later ticks and never overlaps them.
+Each cycle reads a complete Auth registry and fresh Warehouse status. The runner
+requires a ready restaurant, current Warehouse readiness, and acknowledgments
+for Gateway’s current epoch and Serving. Each attempt has a maximum five-second
+budget and requests a fresh Auth service token for `expiry.due`, one restaurant,
+and that Warehouse epoch. It never requests a human session, registration token,
+or `writeoff.confirm`. Credential failure causes no Warehouse dispatch.
+
+Every due poll has a new UUID run ID. There is one POST per selected tenant per
+cycle and no transport replay. Missed ticks recover through the next due poll;
+Warehouse owns the atomic idempotent transition. A lost or malformed response
+keeps the outcome unknown and invalidates only that restaurant once until a
+successful observation. Recovery publishes another stock, menu, and analytics
+invalidation before saving the observed version, even if that poll has no new
+transitions. A failed journal append retains the unknown state for the next poll.
+A verified `not_committed` refusal causes no change.
+Successful pending transitions invalidate stock, menu, and analytics. No final
+writeoff is permitted. Scheduler failure does not change browser authorization
+or the public health endpoint. Shutdown cancels and joins the runner.
+
+Auth mode also requires `AUTH_RUNTIME_SERVICE_KEY`, a separate Auth-to-Gateway
+transport secret. `PRIVATE_LISTEN_HOST` defaults to `127.0.0.1`; `PRIVATE_PORT`
+defaults to `8086` and must differ from public `PORT`. Factory must bind the
+private listener on its isolated backend network and must not publish that port.
+Use TLS with certificate validation outside the isolated test network. The public
+listener does not expose private runtime routes. Keep credentials out of logs,
+browser requests, and source-controlled environment files.
+
+The private surface is `GET /internal/gateway/v2/runtime` and
+`PUT|DELETE /internal/gateway/v2/r/{restaurantID}/registry`. Status reports the
+current Gateway UUID epoch, reconciliation readiness, and packaged Go 1.26.9
+tzdata identity. Mutation additionally verifies the Auth Ed25519 signature,
+60-second lifetime, exact Gateway audience, Auth caller, restaurant, epoch,
+lifecycle version, and register/close permission. Registration checks fresh Auth
+registry state; a deleting scope or retained local tombstone cannot reopen. Exact
+registration preserves the journal. Close is idempotent, retains a tombstone, and
+closes the restaurant journal/SSE context. Auth owns reconciliation and retries.
+
+For the no-frontend lane handoff run `GOWORK=off go test -race -count=1
+./cmd/server/... ./internal/expiration/... ./internal/adapters/...
+./internal/httpapi/... ./internal/live/... ./internal/journal/...`, `make check`,
+`make quality-test`, `go mod verify`, and `go mod tidy`. Local tests use synthetic
+HTTP peers and signing keys. J1/E must use real Auth, Gateway, Warehouse, Serving,
+and Feedback plus synthetic delivery infrastructure. No real-service acceptance
+is implied by the local checks.
+
+### Test-owned operational fixture (protocol 1.1.0)
+
+`tests/fixtures/server` composes the real remote Auth client, scoped API,
+Gateway runtime, journal, live streams and sole expiration scheduler. The wrapper
+uses one controlled clock for token expiry and key refresh, cookie time,
+scoped admission, journal time, live authority/timers and scheduler credentials.
+Production composition keeps its default system clock and no iteration observer.
+
+Build with Go 1.26.9 and `GOWORK=off`:
+
+```sh
+go build -trimpath -o /tmp/fixture-server ./tests/fixtures/server
+go build -trimpath -o /tmp/fixture-control ./tests/fixtures/control
+docker build --pull=false -f tests/fixtures/Dockerfile -t gateway-fixture:local .
+```
+
+The image runs as UID/GID 65532. Its entrypoint is `/fixture-server`, command
+`serve`, and healthcheck `/fixture-server healthcheck`. Mount the generated
+owner config directory read-only at `/run/umir-fixtures/config` and private
+0600 credential files at `/run/umir-fixtures/secrets`. Use the exact
+`OwnerConfig` schema embedded in `tests/fixtures/protocol/protocol.schema.json`.
+The embedded snapshot has SHA256 `3fd4016cfb395c80b9492727b4d60f12b370355f81fd3356abc84984035a044c`.
+Fixture compilation uses the pinned jsonschema/v6 v6.0.2 custom-regexp hook
+with regexp2 v1.11.0 in ECMAScript mode. Format assertion stays enabled.
+Each validation owns its compiled regex instances and budget: at most 1 MiB
+of JSON, 4096 matches, and a 500 ms validation deadline. Each match has a
+100 ms regexp2 timeout (its clock checks have approximately 100 ms granularity).
+Compilation uses a two-second budget. A match timeout, work limit or runtime
+error aborts the enclosing validation, including negation and alternative
+branches. The pinned engine's dot class cannot establish ECMAScript matching
+for U+2028/U+2029. Such a match also rejects the enclosing admission without
+changing the authoritative regex. Failed compilation rejects admission. Concurrent controls share no
+mutable match budget. These limits use physical time for resource control;
+business clock behavior is unchanged.
+
+The exact reviewed Feedback namespace/submission pairs validate as schema inputs.
+Gateway returns `UnsupportedOperation` before mutation or cache insertion.
+The lint policy permits regexp2 only in `tests/fixtures/protocol/*.go`.
+The architecture policy registers it as a vendor used only by fixture-protocol.
+Production, fixture server and fixture control cannot import it directly.
+`make quality-test` checks the positive protocol import and both effective
+gates at each forbidden boundary. Existing component edges, peer-module
+denies and unknown-package rejection remain enforced.
+
+Gateway requires `gateway-auth`, `auth-gateway`, `gateway-warehouse`,
+`gateway-serving`, `gateway-feedback` and separate `fixture-gateway` credentials.
+Service URLs name the owned project services; the public Origin is the runner's
+loopback Origin. The config uses private port 8082, public port 8080, no state
+file and null bootstrap. Do not put credential values in config, arguments,
+environment or evidence. The helper checks file/socket modes and UID/GID.
+
+Both server and control open private inputs with nonblocking, no-follow descriptor
+admission. They reject nonregular files (including FIFOs without writers), wrong
+UID/GID, unsafe modes and oversized files before bounded reading. Credentials
+require exact 0600 mode and at most 64 bytes; owner config is at most 1 MiB.
+
+The wrapper creates a 0700 control directory and 0600 Unix socket at
+`/run/umir-fixtures/control.sock`. Only this socket serves
+`POST /fixture/v1/control`. The business and private service listeners do not
+register fixture controls. Feed one strict request to `/fixture-control request`
+on stdin. The helper reads its local credential and validates the response.
+Supported operations are `fixture.ready`, `clock.read`, `clock.set`,
+`clock.checkpoint` and `scheduler.tick`. The protocol rejects duplicate/unknown
+fields, invalid text, trailing values, depth above 16 and requests over 16 KiB.
+It bounds responses to 256 KiB, concurrency to eight, requests to ten seconds
+and scheduler completion waits to five seconds. Each process retains at most
+256 request identities without eviction. Exact replay returns the original
+response; changed payload under an existing identity conflicts. Capacity
+exhaustion fails closed, including healthcheck requests; keep fixture runs bounded.
+
+`fixture.ready` requires the observed startup scheduler baseline, healthy injected
+consumers and the real private Gateway runtime's readiness. It returns actual
+binary/config hashes and implemented capabilities. A completed scheduler iteration
+can still have failed its Auth or Warehouse exchange; completion never establishes
+business success. New process instances use a fresh instance ID and runtime epoch.
+Restore clock instant/generation only from an observed checkpoint in the next
+private config. In-memory business state follows the normal owner reset behavior.
+
+`expiration.ScopedOptions.IterationCompleted` is an optional send-only sequence
+channel. `Run` counts its synchronous startup iteration as 1. Each received tick
+adds one sequence. An outer defer attempts one nonblocking send after the entire
+tick, including scope closure, cancellation and final watermark updates. Nil,
+full or closed ports drop the observation. An idle/closed/cancelled `Run` exit
+without another tick emits no completion. Consumers should drain the channel and
+keep it open for the run; a sequence gap cannot prove completion.
+
+The fixture consumes startup sequence 1 before admitting manual ticks. It permits
+one outstanding tick ID and FIFO-matches the next actual `Run` completion while
+checking instance/generation. A lost observation or interrupted wait invalidates
+the binding for that process and returns an unknown effect or unavailable evidence.
+It never calls `tick`, dispatches expiry itself, manufactures `DueResult`, signs
+credentials or infers completion from transport callbacks. `clock.set` and manual
+ticks exclude each other. Advancing the clock releases owner-time live timers but
+does not dispatch the scheduler or perform a Warehouse writeoff.
+
+`make check` covers fixture packages and the full fresh race suite. After policy
+changes, `make quality-test` checks all production boundaries plus exact fixture
+registration, fixture-local imports, peer-module denies and unknown-package failure.
+Local probes of this wrapper do not establish real five-service J1/E acceptance.
+
+### Packaged timezone catalog in the isolated fixture
+
+The ordinary test wrapper provides read-only catalog observation for the approved
+`umir-owner-profiles/0.1.0-unpublished` amendment at source
+`ee5ea052cf8239a40fdc3aba7c97c0a143260be284c390168a75c8afb7770460`.
+The control socket accepts `POST /owner-profile/v1` with the existing
+`fixture-gateway` credential. This endpoint is separate from RPC 1.1.0. It adds
+no RPC capabilities. Gateway has no missing-data profile or `serve-profile` mode.
+
+Run `/fixture-control profile --request /run/umir-fixtures/profile-request.json`.
+The fixed request file must be a regular, non-symlink file owned by the fixture
+user with mode 0600. Its fields are `amendment`, `project`, `requestID`,
+`expectedInstanceID`, `expectedGeneration`, and `action` (`catalog-report`).
+Unknown fields, duplicate keys, stale clock identities, path aliases, wrong
+credentials, and unready business composition are refused. Up to 64 successful
+read IDs are retained. Replaying an ID returns identical report bytes. Changing
+its envelope returns `RequestConflict`. Use a fresh ID for a fresh observation.
+A report does not grant normal stack readiness or E2E acceptance.
+
+The pinned Go 1.26.9 fixture build parses the actual `zipdata` AST constant from
+`GOROOT/src/time/tzdata/zzipdata.go`. It compares its bytes with
+`GOROOT/lib/time/zoneinfo.zip` and verifies that the built server contains the
+same archive. The scratch image includes the archive and the exact build
+provenance at `/usr/local/lib/umir/zoneinfo.zip` and
+`/usr/local/lib/umir/catalog-provenance.json`. Provenance binds the toolchain
+image/source, executable digest, archive digest/size, and common version
+`go1.26.9-embedded`. The build also embeds the sorted fixture-source manifest
+digest. Its paths, numeric modes and file digests are recorded in
+`/usr/local/lib/umir/fixture-source-manifest.json`; its binding is in
+`/usr/local/lib/umir/fixture-source.json`.
+
+Startup and each fresh catalog observation verify the fixed files, running
+executable, provenance, ZIP structure, and Moscow timezone data. Startup passes
+the measured version into the existing Gateway runtime constructor. No
+`ZONEINFO` override is accepted. The final image has no host/system/GOROOT
+zoneinfo directory. The runner must inspect image filesystems and mounts, retain
+these original build facts, and independently qualify all four real catalogs
+and runtime versions before BE-E4-16 can pass. A missing-data refusal is owned
+by the separate Warehouse fixture.
+
+The approved Feedback discovery overlay
+`b2e3b3824e622d68360d73854f24920c827b9c1aefadf013241ec69262daa02f`
+adds no Gateway credential or caller authority. Gateway retains its exact five
+service credential references and separate control credential. Source/profile
+handoff is separate from actual Auth/Feedback provisioning and J1/E acceptance.

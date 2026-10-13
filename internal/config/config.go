@@ -14,7 +14,16 @@ import (
 )
 
 type Config struct {
-	Port string
+	AuthURL               *url.URL
+	AuthServiceKey        string
+	AuthRuntimeServiceKey string
+	PrivateListenHost     string
+	PrivatePort           string
+	AuthTimeout           time.Duration
+	ServingServiceKey     string
+	WarehouseServiceKey   string
+	FeedbackServiceKey    string
+	Port                  string
 	// ListenHost is the IP address the server binds: loopback by default, 0.0.0.0 or :: in a container.
 	ListenHost   string
 	ServingURL   *url.URL
@@ -93,7 +102,57 @@ func Load(getenv func(string) string) (Config, error) {
 	if err != nil || cfg.ExpirationRunInterval <= 0 {
 		return Config{}, fmt.Errorf("EXPIRATION_RUN_INTERVAL: expected positive duration such as 1s")
 	}
-	if cfg.Operator, err = loadOperator(getenv, value); err != nil {
+	if raw := getenv("AUTH_URL"); raw != "" {
+		if cfg.AuthURL, err = upstreamURL("AUTH_URL", raw); err != nil {
+			return Config{}, err
+		}
+		if cfg.AuthURL.Path != "" && cfg.AuthURL.Path != "/" {
+			return Config{}, errors.New("AUTH_URL: expected an origin without a path")
+		}
+		cfg.AuthServiceKey = getenv("AUTH_SERVICE_KEY")
+		if cfg.AuthServiceKey == "" || strings.ContainsAny(cfg.AuthServiceKey, " \t\r\n") {
+			return Config{}, errors.New("AUTH_SERVICE_KEY: private transport credential is required")
+		}
+		isolated := getenv("AUTH_ISOLATED_TEST_NETWORK")
+		if isolated != "" && isolated != "true" && isolated != "false" {
+			return Config{}, errors.New("AUTH_ISOLATED_TEST_NETWORK: expected true or false")
+		}
+		ip := net.ParseIP(cfg.AuthURL.Hostname())
+		if cfg.AuthURL.Scheme == "http" && (ip == nil || !ip.IsLoopback()) && isolated != "true" {
+			return Config{}, errors.New("AUTH_URL: HTTPS is required outside loopback or AUTH_ISOLATED_TEST_NETWORK=true")
+		}
+		for key, destination := range map[string]*string{"SERVING_SERVICE_KEY": &cfg.ServingServiceKey, "WAREHOUSE_SERVICE_KEY": &cfg.WarehouseServiceKey, "FEEDBACK_SERVICE_KEY": &cfg.FeedbackServiceKey} {
+			*destination = getenv(key)
+			if *destination == "" || strings.ContainsAny(*destination, " \t\r\n") {
+				return Config{}, fmt.Errorf("%s: private transport credential is required", key)
+			}
+		}
+		for key, target := range map[string]*url.URL{"SERVING_URL": cfg.ServingURL, "WAREHOUSE_URL": cfg.WarehouseURL, "FEEDBACK_URL": cfg.FeedbackURL} {
+			ip := net.ParseIP(target.Hostname())
+			if (target.Path != "" && target.Path != "/") || target.Scheme == "http" && (ip == nil || !ip.IsLoopback()) && isolated != "true" {
+				return Config{}, fmt.Errorf("%s: scoped transport requires an origin and HTTPS outside isolated tests", key)
+			}
+		}
+		cfg.AuthRuntimeServiceKey = getenv("AUTH_RUNTIME_SERVICE_KEY")
+		if cfg.AuthRuntimeServiceKey == "" || strings.ContainsAny(cfg.AuthRuntimeServiceKey, " \t\r\n") || cfg.AuthRuntimeServiceKey == cfg.AuthServiceKey {
+			return Config{}, errors.New("AUTH_RUNTIME_SERVICE_KEY: a separate Auth-to-Gateway transport credential is required")
+		}
+		cfg.PrivateListenHost = value("PRIVATE_LISTEN_HOST", "127.0.0.1")
+		if ip := net.ParseIP(cfg.PrivateListenHost); ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+			return Config{}, errors.New("PRIVATE_LISTEN_HOST: expected loopback or unspecified IP")
+		}
+		cfg.PrivatePort = value("PRIVATE_PORT", "8086")
+		if n, err := strconv.Atoi(cfg.PrivatePort); err != nil || n < 1 || n > 65535 || cfg.PrivatePort == cfg.Port {
+			return Config{}, errors.New("PRIVATE_PORT: expected a separate TCP port")
+		}
+		cfg.AuthTimeout, err = duration("AUTH_TIMEOUT", value("AUTH_TIMEOUT", "5s"))
+		if err != nil {
+			return Config{}, err
+		}
+	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
+		return Config{}, errors.New("AUTH_URL: required with Auth settings")
+	}
+	if cfg.Operator, err = loadOperator(getenv, value, cfg.AuthURL != nil); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -110,7 +169,7 @@ func upstreamURL(key, raw string) (*url.URL, error) {
 }
 
 // loadOperator never echoes a value: a misplaced secret must not reach the startup log.
-func loadOperator(getenv func(string) string, value func(key, fallback string) string) (Operator, error) {
+func loadOperator(getenv func(string) string, value func(key, fallback string) string, remote bool) (Operator, error) {
 	op := Operator{
 		CookieMode:            getenv("OPERATOR_COOKIE_MODE"),
 		PublicOrigin:          getenv("OPERATOR_PUBLIC_ORIGIN"),
@@ -124,6 +183,10 @@ func loadOperator(getenv func(string) string, value func(key, fallback string) s
 	}
 	if err := checkOrigin(op.CookieMode, op.PublicOrigin); err != nil {
 		return Operator{}, err
+	}
+	if remote {
+		op.StorePath, op.BootstrapLogin, op.BootstrapDisplayName, op.BootstrapPasswordHash = "", "", "", ""
+		return op, nil
 	}
 	if !filepath.IsAbs(op.StorePath) || filepath.Clean(op.StorePath) != op.StorePath {
 		return Operator{}, errors.New("OPERATOR_STORE_PATH: expected a clean absolute path to the account file")

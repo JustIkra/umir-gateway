@@ -59,7 +59,7 @@ func (s *Service) view(token string, st *session) Session {
 		idle = ordinary
 	}
 	return Session{
-		ID: token, CSRFToken: sessionCSRF(token), ExpiresAt: idle, IdleExpiresAt: idle,
+		PublicationRevision: s.eventRevision, ID: token, CSRFToken: sessionCSRF(token), ExpiresAt: idle, IdleExpiresAt: idle,
 		AbsoluteExpiresAt: st.expires, RememberMe: st.rememberMe,
 	}
 }

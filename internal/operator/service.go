@@ -66,8 +66,9 @@ type Options struct {
 // Session is what the HTTP layer needs about an authenticated session. ID is the bearer token for the
 // cookie; the service itself keeps only its digest.
 type Session struct {
-	ID        string
-	CSRFToken string
+	PublicationRevision uint64 `json:"-"`
+	ID                  string
+	CSRFToken           string
 	// ExpiresAt is the earlier of the idle and absolute deadlines.
 	ExpiresAt time.Time
 	// IdleExpiresAt moves with authenticated requests of an ordinary session but never past
@@ -99,7 +100,8 @@ type Service struct {
 	// feedback holds the admitted feedback posts of the whole process.
 	feedback attempts
 	// events wait under mu for unlock to report them to the observer.
-	events []sessionEvent
+	events        []sessionEvent
+	eventRevision uint64
 }
 
 // NewService starts from the persisted state. Stored sessions that expired or belong to an older

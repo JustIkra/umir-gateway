@@ -7,7 +7,7 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/go-quality-fixtures.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 fixture="$scratch/project"
 mkdir -p "$fixture/scripts" "$fixture/cmd/server"
-cp "$root/.golangci.yml" "$root/.go-arch-lint.yml" "$root/.go-quality-versions" "$root/.go-quality-modules" "$root/go.mod" "$fixture/"
+cp "$root/.golangci.yml" "$root/.go-arch-lint.yml" "$root/.go-quality-versions" "$root/.go-quality-modules" "$root/go.mod" "$root/go.sum" "$fixture/"
 cp "$root/scripts/go-quality.sh" "$fixture/scripts/"
 module="$(awk '$1 == "module" {print $2}' "$fixture/go.mod")"
 printf 'package main\n\nfunc main() {}\n' > "$fixture/cmd/server/main.go"
@@ -135,4 +135,47 @@ set -e
 [[ "$status" == 7 ]] || { cat "$scratch/tool-failure"; printf 'Formatter exit status was lost: %s\n' "$status" >&2; exit 1; }
 passed=$((passed + 1))
 if [[ -n "$original_bin" ]]; then export GO_QUALITY_BIN="$original_bin"; else unset GO_QUALITY_BIN; fi
+
+mkdir -p "$fixture/tests/fixtures/server" "$fixture/tests/fixtures/control" "$fixture/tests/fixtures/protocol" "$fixture/tests/fixtures/unregistered"
+printf 'package protocol\n\nconst Value = 1\n' > "$fixture/tests/fixtures/protocol/protocol.go"
+printf 'package main\n\nimport "%s/tests/fixtures/protocol"\n\nfunc main() { _ = protocol.Value }\n' "$module" > "$fixture/tests/fixtures/server/main.go"
+printf 'package main\n\nimport "%s/tests/fixtures/protocol"\n\nfunc main() { _ = protocol.Value }\n' "$module" > "$fixture/tests/fixtures/control/main.go"
+run check > "$scratch/fixture-positive" 2>&1 || { cat "$scratch/fixture-positive"; exit 1; }
+passed=$((passed + 1))
+printf 'package unregistered\n\nconst Value = 1\n' > "$fixture/tests/fixtures/unregistered/new.go"
+reject arch 'not attached'
+rm "$fixture/tests/fixtures/unregistered/new.go"
+printf 'package main\n\nimport "%s/tests/fixtures/protocol"\n\nfunc main() { _ = protocol.Value }\n' "$module" > "$fixture/cmd/server/main.go"
+reject lint 'depguard'
+reject arch 'tests/fixtures/protocol'
+printf 'package main\n\nfunc main() {}\n' > "$fixture/cmd/server/main.go"
+printf 'package main\n\nimport "%s/tests/testsupport"\n\nfunc main() { _ = testsupport.Value }\n' "$module" > "$fixture/tests/fixtures/server/main.go"
+reject lint 'depguard'
+reject arch 'testsupport'
+printf 'package main\n\nfunc main() {}\n' > "$fixture/tests/fixtures/server/main.go"
+for peer in warehouse serving; do
+  mkdir -p "$scratch/$peer"
+  printf 'module github.com/JustIkra/umir-%s\n\ngo 1.26.5\n' "$peer" > "$scratch/$peer/go.mod"
+  printf 'package peer\n\nconst Value = 1\n' > "$scratch/$peer/peer.go"
+  cp "$fixture/go.mod" "$scratch/before-peer.mod"
+  (cd "$fixture" && go mod edit "-require=github.com/JustIkra/umir-$peer@v0.0.0" "-replace=github.com/JustIkra/umir-$peer=$scratch/$peer")
+  printf 'package main\n\nimport peer "github.com/JustIkra/umir-%s"\n\nfunc main() { _ = peer.Value }\n' "$peer" > "$fixture/tests/fixtures/server/main.go"
+  reject lint 'depguard'
+  reject arch "umir-$peer"
+  printf 'package main\n\nfunc main() {}\n' > "$fixture/tests/fixtures/server/main.go"
+  mv "$scratch/before-peer.mod" "$fixture/go.mod"
+done
+
+printf 'package protocol\n\nimport "github.com/dlclark/regexp2"\n\nfunc Engine() *regexp2.Regexp { return regexp2.MustCompile("a", regexp2.ECMAScript) }\n' > "$fixture/tests/fixtures/protocol/engine.go"
+run check > "$scratch/fixture-regexp-positive" 2>&1 || { cat "$scratch/fixture-regexp-positive"; exit 1; }
+passed=$((passed + 1))
+rm "$fixture/tests/fixtures/protocol/engine.go"
+for boundary in cmd/server tests/fixtures/server tests/fixtures/control; do
+  printf 'package main\n\nimport "github.com/dlclark/regexp2"\n\nfunc main() { _ = regexp2.MustCompile("a", regexp2.ECMAScript) }\n' > "$fixture/$boundary/main.go"
+  reject lint 'depguard'
+  reject arch 'github.com/dlclark/regexp2'
+  printf 'package main\n\nfunc main() {}\n' > "$fixture/$boundary/main.go"
+done
+rm "$fixture/tests/fixtures/server/main.go" "$fixture/tests/fixtures/control/main.go" "$fixture/tests/fixtures/protocol/protocol.go"
+
 printf 'Quality enforcement: %d scenarios passed\n' "$passed"

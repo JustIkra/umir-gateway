@@ -1,0 +1,1535 @@
+{
+  "sourceIdentity": "sha256:1f585cce70d8aaf9422d769c1c804ccb3e7b6e0e318c383a8cedbc5cf91310de",
+  "schemaSHA256": "3fd4016cfb395c80b9492727b4d60f12b370355f81fd3356abc84984035a044c",
+  "positive": [
+    {
+      "schema": "#/$defs/fixture_ready_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "fixture.ready",
+        "data": {}
+      }
+    },
+    {
+      "schema": "#/$defs/fixture_ready_response",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "fixture.ready",
+        "data": {
+          "target": "auth",
+          "instanceID": "33333333-3333-4333-8333-333333333333",
+          "protocol": "umir-operational-fixtures/1.1.0",
+          "binarySHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "configSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "ready": true,
+          "capabilities": [
+            "clock.read",
+            "bootstrap.read"
+          ]
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/clock_read_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.read",
+        "data": {}
+      }
+    },
+    {
+      "schema": "#/$defs/clock_read_response",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.read",
+        "data": {
+          "owner": "auth",
+          "instanceID": "33333333-3333-4333-8333-333333333333",
+          "source": "owner-injected",
+          "fixtureID": "22222222-2222-4222-8222-222222222222",
+          "generation": "1",
+          "instant": "2026-10-13T09:00:00+03:00",
+          "injectedConsumers": [
+            "Accounts",
+            "JWT",
+            "OTP",
+            "Outbox"
+          ],
+          "healthy": true
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/clock_set_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.set",
+        "data": {
+          "expectedInstanceID": "33333333-3333-4333-8333-333333333333",
+          "expectedGeneration": "1",
+          "instant": "2026-10-13T09:01:00+03:00"
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/clock_set_response",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.set",
+        "data": {
+          "owner": "auth",
+          "instanceID": "33333333-3333-4333-8333-333333333333",
+          "source": "owner-injected",
+          "fixtureID": "22222222-2222-4222-8222-222222222222",
+          "generation": "2",
+          "instant": "2026-10-13T09:01:00+03:00",
+          "injectedConsumers": [
+            "Accounts",
+            "JWT",
+            "OTP",
+            "Outbox"
+          ],
+          "healthy": true
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/clock_checkpoint_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.checkpoint",
+        "data": {
+          "expectedInstanceID": "33333333-3333-4333-8333-333333333333",
+          "expectedGeneration": "1"
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/clock_checkpoint_response",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.checkpoint",
+        "data": {
+          "clock": {
+            "owner": "auth",
+            "instanceID": "33333333-3333-4333-8333-333333333333",
+            "source": "owner-injected",
+            "fixtureID": "22222222-2222-4222-8222-222222222222",
+            "generation": "1",
+            "instant": "2026-10-13T09:00:00+03:00",
+            "injectedConsumers": [
+              "Accounts",
+              "JWT",
+              "OTP",
+              "Outbox"
+            ],
+            "healthy": true
+          },
+          "checkpointSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/scheduler_tick_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "scheduler.tick",
+        "data": {
+          "expectedInstanceID": "33333333-3333-4333-8333-333333333333",
+          "expectedGeneration": "1",
+          "tickID": "22222222-2222-4222-8222-222222222222"
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/scheduler_tick_response",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "scheduler.tick",
+        "data": {
+          "tickID": "22222222-2222-4222-8222-222222222222",
+          "clock": {
+            "owner": "gateway",
+            "instanceID": "33333333-3333-4333-8333-333333333333",
+            "source": "owner-injected",
+            "fixtureID": "22222222-2222-4222-8222-222222222222",
+            "generation": "1",
+            "instant": "2026-10-13T09:00:00+03:00",
+            "injectedConsumers": [
+              "Accounts",
+              "JWT",
+              "OTP",
+              "Outbox"
+            ],
+            "healthy": true
+          },
+          "completed": true
+        }
+      }
+    },
+    {
+      "schema": "#/$defs/feedback_observe_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "0000001e-1111-4111-8111-111111111111",
+        "operation": "feedback.observe",
+        "data": {
+          "submissions": [
+            {
+              "namespace": {
+                "kind": "app",
+                "userID": "0000000b-1111-4111-8111-111111111111",
+                "orgID": "0000000c-1111-4111-8111-111111111111",
+                "tenantID": "0000000d-1111-4111-8111-111111111111"
+              },
+              "submissionID": "0000000a-1111-4111-8111-111111111111"
+            },
+            {
+              "namespace": {
+                "kind": "app",
+                "userID": "0000000b-1111-4111-8111-111111111111",
+                "orgID": "0000000c-1111-4111-8111-111111111111",
+                "tenantID": "0000000e-1111-4111-8111-111111111111"
+              },
+              "submissionID": "0000000a-1111-4111-8111-111111111111"
+            },
+            {
+              "namespace": {
+                "kind": "anonymous"
+              },
+              "submissionID": "0000000a-1111-4111-8111-111111111111"
+            }
+          ],
+          "waitMs": 1000
+        }
+      }
+    },
+    {
+      "name": "serving-four-service-credentials-and-separate-control",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "gateway-owner-config",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "gateway",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "gateway",
+          "path": "/run/umir-fixtures/secrets/fixture-gateway"
+        },
+        "credentialFiles": {
+          "gateway-auth": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/secrets/gateway-auth"
+          },
+          "auth-gateway": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/secrets/auth-gateway"
+          },
+          "gateway-warehouse": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/secrets/gateway-warehouse"
+          },
+          "gateway-serving": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "gateway-feedback": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/secrets/gateway-feedback"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8082,
+        "publicPort": 8080,
+        "origin": "http://127.0.0.1:3000",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "gateway": "http://gateway:8082",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "feedback": "http://feedback:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/private/smtp-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "gateway",
+            "path": "/run/umir-fixtures/private/notification-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "unknown control field",
+      "schema": "#/$defs/clock_read_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.read",
+        "data": {},
+        "password": "forbidden"
+      }
+    },
+    {
+      "name": "backward-capable generation zero",
+      "schema": "#/$defs/clock_set_request",
+      "value": {
+        "version": 1,
+        "project": "umir-backend-0123456789abcdef01234567",
+        "requestID": "22222222-2222-4222-8222-222222222222",
+        "operation": "clock.set",
+        "data": {
+          "expectedInstanceID": "33333333-3333-4333-8333-333333333333",
+          "expectedGeneration": "0",
+          "instant": "2026-10-13T09:00:00+03:00"
+        }
+      }
+    },
+    {
+      "name": "serving-missing-serving-auth",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-wrong-target-serving-auth",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-aliased-path-serving-auth",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/fixture-serving"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-missing-auth-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-wrong-target-auth-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-aliased-path-auth-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/fixture-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-missing-gateway-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-wrong-target-gateway-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-aliased-path-gateway-serving",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/fixture-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-missing-serving-warehouse",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-wrong-target-serving-warehouse",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-aliased-path-serving-warehouse",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/fixture-serving"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-control-in-service-map",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          },
+          "fixture-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/fixture-serving"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-extra-service",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          },
+          "gateway-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-auth"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-empty-service-map",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {},
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-wrong-target-control",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "auth",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-control-refuses-service-key",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/auth-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-discovery-refuses-lifecycle",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "controlCredentialFile": {
+          "target": "serving",
+          "path": "/run/umir-fixtures/secrets/fixture-serving"
+        },
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    },
+    {
+      "name": "serving-missing-control",
+      "schema": "#/$defs/OwnerConfig",
+      "value": {
+        "version": 1,
+        "protocol": "umir-operational-fixtures/1.1.0",
+        "project": "umir-backend-0123456789abcdef01234567",
+        "owner": "serving",
+        "fixtureID": "22222222-2222-4222-8222-222222222222",
+        "initialInstant": "2026-10-13T09:00:00+03:00",
+        "clockGeneration": "1",
+        "credentialFiles": {
+          "serving-auth": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-auth"
+          },
+          "auth-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/auth-serving"
+          },
+          "gateway-serving": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/gateway-serving"
+          },
+          "serving-warehouse": {
+            "target": "serving",
+            "path": "/run/umir-fixtures/secrets/serving-warehouse"
+          }
+        },
+        "controlSocket": "/run/umir-fixtures/control.sock",
+        "privatePort": 8080,
+        "publicPort": 0,
+        "origin": "http://127.0.0.1:49152",
+        "serviceURLs": {
+          "auth": "http://auth:8080",
+          "feedback": "http://feedback:8080",
+          "warehouse": "http://warehouse:8080",
+          "serving": "http://serving:8080",
+          "gateway": "http://gateway:8080"
+        },
+        "delivery": {
+          "smtpHost": "smtp",
+          "smtpPort": 2525,
+          "smtpTLS": "starttls",
+          "smtpCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          },
+          "notificationProxy": "http://notification:3128",
+          "notificationCAFile": {
+            "target": "auth",
+            "path": "/run/umir-fixtures/secrets/synthetic-ca.pem"
+          }
+        },
+        "stateFile": "",
+        "bootstrap": null
+      }
+    }
+  ]
+}

@@ -21,26 +21,43 @@ func NewSessionEvents() *SessionEvents {
 
 // update is the newest change of one session: either its new deadlines or its end.
 type update struct {
+	revision       uint64
 	ended          operator.EndReason
 	idle, absolute time.Time
 }
 
 // watcher keeps only the newest update of its session; an end is never replaced by an extension.
 type watcher struct {
-	mu      sync.Mutex
-	pending *update
-	ready   chan struct{}
+	revision uint64
+	ended    bool
+	mu       sync.Mutex
+	pending  *update
+	ready    chan struct{}
 }
 
 func (w *watcher) offer(u update) {
 	w.mu.Lock()
-	if w.pending == nil || w.pending.ended == "" {
-		w.pending = &u
+	if w.ended || u.revision <= w.revision {
+		w.mu.Unlock()
+		return
 	}
+	w.revision, w.ended = u.revision, u.ended != ""
+	w.pending = &u
 	w.mu.Unlock()
 	select {
 	case w.ready <- struct{}{}:
 	default:
+	}
+}
+
+func (w *watcher) observe(revision uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if revision > w.revision {
+		w.revision = revision
+	}
+	if w.pending != nil && w.pending.revision <= revision {
+		w.pending = nil
 	}
 }
 
@@ -84,11 +101,11 @@ func (e *SessionEvents) deliver(key string, u update) {
 }
 
 // SessionExtended passes the new deadlines to the streams of the session.
-func (e *SessionEvents) SessionExtended(key string, idleExpiresAt, absoluteExpiresAt time.Time) {
-	e.deliver(key, update{idle: idleExpiresAt, absolute: absoluteExpiresAt})
+func (e *SessionEvents) SessionExtended(key string, revision uint64, idleExpiresAt, absoluteExpiresAt time.Time) {
+	e.deliver(key, update{revision: revision, idle: idleExpiresAt, absolute: absoluteExpiresAt})
 }
 
 // SessionEnded tells the streams of the session to end.
-func (e *SessionEvents) SessionEnded(key string, reason operator.EndReason) {
-	e.deliver(key, update{ended: reason})
+func (e *SessionEvents) SessionEnded(key string, revision uint64, reason operator.EndReason) {
+	e.deliver(key, update{revision: revision, ended: reason})
 }

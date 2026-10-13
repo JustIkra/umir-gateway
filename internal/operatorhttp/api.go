@@ -64,6 +64,7 @@ type Options struct {
 
 // API serves /api/operator/ and guards business routes.
 type API struct {
+	v2       bool
 	accounts Accounts
 	cookies  cookieNames
 	secure   bool

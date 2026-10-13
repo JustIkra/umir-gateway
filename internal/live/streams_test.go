@@ -267,11 +267,11 @@ func TestSessionEventsReachOnlyTheirSession(t *testing.T) {
 	address := f.serve(t)
 	mine := greeted(t, address, "a")
 	other := greeted(t, address, "b")
-	f.events.SessionExtended(operator.SessionKey("a"), start.Add(40*time.Minute), start.Add(8*time.Hour))
+	f.events.SessionExtended(operator.SessionKey("a"), 1, start.Add(40*time.Minute), start.Add(8*time.Hour))
 	if got := mine.next(); got != `session {"idleExpiresAt":"2026-10-12T14:40:30+03:00","absoluteExpiresAt":"2026-10-12T22:00:30+03:00"}` {
 		t.Fatalf("got %s", got)
 	}
-	f.events.SessionEnded(operator.SessionKey("a"), operator.EndSignedOut)
+	f.events.SessionEnded(operator.SessionKey("a"), 2, operator.EndSignedOut)
 	if got := mine.next(); got != `session-ended {"reason":"signed_out"}` {
 		t.Fatalf("got %s", got)
 	}
@@ -286,8 +286,8 @@ func TestSessionEventsReachOnlyTheirSession(t *testing.T) {
 
 func TestAnEndIsNeverReplacedByALaterExtension(t *testing.T) {
 	w := &watcher{ready: make(chan struct{}, 1)}
-	w.offer(update{ended: operator.EndRevoked})
-	w.offer(update{idle: start, absolute: start})
+	w.offer(update{revision: 1, ended: operator.EndRevoked})
+	w.offer(update{revision: 2, idle: start, absolute: start})
 	if u, ok := w.take(); !ok || u.ended != operator.EndRevoked {
 		t.Fatalf("took %+v %v", u, ok)
 	}

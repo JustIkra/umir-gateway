@@ -18,11 +18,19 @@ components:
   passwordhash: {in: "internal/adapters/argon2id/**"}
   accountfile: {in: "internal/adapters/accountfile/**"}
   operatorhttp: {in: "internal/operatorhttp/**"}
+  livecursor: {in: "internal/adapters/livecursor/**"}
+  authclient: {in: "internal/adapters/authclient/**"}
   strictjson: {in: "internal/strictjson/**"}
   journal: {in: "internal/journal/**"}
   live: {in: "internal/live/**"}
   expiration: {in: "internal/expiration/**"}
+  fixture-server: {in: "tests/fixtures/server/**"}
+  fixture-control: {in: "tests/fixtures/control/**"}
+  fixture-catalog: {in: "tests/fixtures/catalog/**"}
+  fixture-protocol: {in: "tests/fixtures/protocol/**"}
 vendors:
+  fixture-regexp2: {in: "github.com/dlclark/regexp2"}
+  jsonschema: {in: "github.com/santhosh-tekuri/jsonschema/v6"}
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
   x-term: {in: "golang.org/x/term"}
@@ -30,9 +38,10 @@ deps:
   config:
     mayDependOn: [config]
   httpapi:
-    mayDependOn: [httpapi]
+    mayDependOn: [httpapi, strictjson, journal, expiration]
+    canUse: [jsonschema]
   upstream:
-    mayDependOn: [upstream]
+    mayDependOn: [upstream, httpapi, expiration]
   proxy:
     mayDependOn: [proxy]
   transport:
@@ -40,12 +49,12 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, journal, live, expiration]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor]
     canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport]
   integration:
-    mayDependOn: [integration, bootstrap, transport, proxy, testsupport]
+    mayDependOn: [integration, bootstrap, transport, proxy, testsupport, authclient, operatorhttp]
   operator:
     mayDependOn: [operator]
     canUse: [x-text-norm]
@@ -56,11 +65,25 @@ deps:
     mayDependOn: [accountfile, operator, strictjson]
   operatorhttp:
     mayDependOn: [operatorhttp, operator, httpapi, strictjson]
+  livecursor:
+    mayDependOn: [livecursor, journal]
+  authclient:
+    mayDependOn: [authclient, operatorhttp, strictjson, httpapi, expiration]
   strictjson:
     mayDependOn: [strictjson]
   journal:
     mayDependOn: [journal]
   live:
-    mayDependOn: [live, operator, httpapi]
+    mayDependOn: [live, operator, httpapi, journal]
   expiration:
     mayDependOn: [expiration, journal]
+  fixture-server:
+    mayDependOn: [fixture-server, fixture-protocol, fixture-catalog, authclient, upstream, livecursor, expiration, httpapi, journal, live, operatorhttp]
+  fixture-control:
+    mayDependOn: [fixture-control, fixture-protocol, fixture-catalog]
+  fixture-protocol:
+    mayDependOn: [fixture-protocol, fixture-catalog, strictjson, live]
+    canUse: [jsonschema, fixture-regexp2]
+
+  fixture-catalog:
+    mayDependOn: [fixture-catalog, strictjson]
