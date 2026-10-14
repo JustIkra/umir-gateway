@@ -8,6 +8,14 @@ import (
 )
 
 func decodeFacadeFailure(data []byte, status int) (*operatorhttp.AuthFailure, error) {
+	return decodeOperationFailure(data, status, false)
+}
+
+func decodeCollectionFailure(data []byte, status int) (*operatorhttp.AuthFailure, error) {
+	return decodeOperationFailure(data, status, true)
+}
+
+func decodeOperationFailure(data []byte, status int, collection bool) (*operatorhttp.AuthFailure, error) {
 	if operatorhttp.ValidateFacadeFailure(data) != nil {
 		return nil, errInvalidResult
 	}
@@ -31,6 +39,11 @@ func decodeFacadeFailure(data []byte, status int) (*operatorhttp.AuthFailure, er
 		"ChallengeLocked": 400, "DeliveryUnavailable": 503, "RateLimited": 429, "LoginRateLimited": 429,
 		"PasswordChangeRateLimited": 429, "InvalidDisplayName": 422, "PasswordRejected": 422,
 		"AuthUnavailable": 503, "AuthStorageUnavailable": 503, "AuthUpdateOutcomeUnknown": 503,
+	}
+	if collection {
+		allowed["RefreshRequired"] = 409
+		allowed["LimitExceeded"] = 503
+		allowed["ScopeDeleted"] = 410
 	}
 	if allowed[wire.Code] != status || (wire.SessionRevoked != nil && wire.Code != "PasswordChangeRateLimited") ||
 		(wire.Code == "PasswordChangeRateLimited" && wire.SessionRevoked == nil) {

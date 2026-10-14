@@ -1,7 +1,7 @@
 {
   "source": {
-    "publicSHA256": "e710150288d650965cfee80b7cb623f5466583c03da9edf5561f94d127970897",
-    "privateSHA256": "f1a46a199c5c616523ff24ed0c43a0ae92b43edd93e1264a854fd766030aa1c1"
+    "publicSHA256": "f1be4d340fcc609ff6429bfe509836afbe0040337e5f7c22702b90bd46063298",
+    "privateSHA256": "1b7e5d531e15b44f477a980f90abb72ed15b5b77168375569be1849121df7d05"
   },
   "operations": {
     "csrf": {
@@ -353,6 +353,62 @@
         "$ref": "#/components/schemas/Invitation"
       }
     },
+    "organizationInvitations": {
+      "path": "/api/v2/orgs/{orgID}/invitations",
+      "method": "GET",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        {
+          "name": "cursor",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        {
+          "name": "state",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "expired",
+              "revoked",
+              "suppressed",
+              "all"
+            ],
+            "default": "all"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/InvitationsPage"
+      }
+    },
     "resendInvitation": {
       "path": "/api/v2/orgs/{orgID}/invitations/{invitationID}/resend",
       "method": "POST",
@@ -573,6 +629,88 @@
       },
       "response": {
         "$ref": "#/components/schemas/SessionIssued"
+      }
+    },
+    "organizationMembers": {
+      "path": "/api/v2/orgs/{orgID}/members",
+      "method": "GET",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        {
+          "name": "cursor",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        {
+          "name": "state",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked",
+              "all"
+            ],
+            "default": "active"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/MembersPage"
+      }
+    },
+    "resendInvitationLink": {
+      "path": "/api/v2/orgs/{orgID}/invitations/{invitationID}/resend-link",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "invitationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
       }
     }
   },
@@ -1514,6 +1652,83 @@
           }
         }
       },
+      "InvitationsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "items"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/AuthPageIdentity"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/InvitationListRow"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "AuthPageIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orgID",
+          "readerEpoch",
+          "aggregateRevision",
+          "evaluatedAt"
+        ],
+        "properties": {
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "readerEpoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "aggregateRevision": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "InvitationListRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "invitation",
+          "linkDelivery",
+          "resendAllowed"
+        ],
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/Invitation"
+          },
+          "linkDelivery": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MailJob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resendAllowed": {
+            "type": "boolean"
+          }
+        }
+      },
       "ChallengeBegin": {
         "type": "object",
         "additionalProperties": false,
@@ -1964,6 +2179,61 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 32
+          }
+        }
+      },
+      "MembersPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "items"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/AuthPageIdentity"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/MemberContact"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "MemberContact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership",
+          "displayName",
+          "email"
+        ],
+        "properties": {
+          "membership": {
+            "$ref": "#/components/schemas/Membership"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Email"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

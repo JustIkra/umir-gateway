@@ -1,5 +1,5 @@
 {
-  "contractIdentity": "sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6",
+  "contractIdentity": "UA1:sha256:f1be4d340fcc609ff6429bfe509836afbe0040337e5f7c22702b90bd46063298",
   "operations": {
     "products": {
       "path": "/api/v2/r/{restaurantID}/warehouse/products",
@@ -936,6 +936,54 @@
       ],
       "response": {
         "$ref": "#/components/schemas/LiveEvent"
+      }
+    },
+    "productBatches": {
+      "path": "/api/v2/r/{restaurantID}/warehouse/products/{productID}/batches",
+      "method": "GET",
+      "capability": "stock.read",
+      "owner": "warehouse",
+      "parameters": [
+        {
+          "name": "restaurantID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "productID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        {
+          "name": "cursor",
+          "in": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/ScopedProductBatches"
       }
     }
   },
@@ -4955,7 +5003,97 @@
             "pattern": "^[A-Za-z0-9_-]{43}$"
           }
         }
+      },
+      "ScopedProductBatches": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "result"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/BusinessContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProductBatchPage"
+          }
+        }
+      },
+      "ProductBatchPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productID",
+          "evaluatedAt",
+          "page",
+          "items"
+        ],
+        "properties": {
+          "productID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageIdentity"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/ProductBatchRow"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProductBatchRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batch",
+          "baseUnit",
+          "status"
+        ],
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/PositiveBatch"
+          },
+          "baseUnit": {
+            "$ref": "#/components/schemas/BaseUnit"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "pending_writeoff"
+            ]
+          }
+        }
+      },
+      "PositiveBatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BatchV2"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "remainingQuantity": {
+                "$ref": "#/components/schemas/PositiveQuantity"
+              }
+            }
+          }
+        ]
       }
     }
-  }
+  },
+  "predecessorContractIdentity": "sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6"
 }

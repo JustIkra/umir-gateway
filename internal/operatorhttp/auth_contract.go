@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -23,9 +24,11 @@ import (
 var authContractJSON []byte
 
 type facadeParameter struct {
-	Name      string `json:"name"`
-	In        string `json:"in"`
-	Required  bool   `json:"required"`
+	Name      string          `json:"name"`
+	In        string          `json:"in"`
+	Required  bool            `json:"required"`
+	Schema    json.RawMessage `json:"schema"`
+	integer   bool
 	validator *jsonschema.Schema
 }
 
@@ -92,6 +95,13 @@ func loadFacade() (*facadeContract, error) {
 				}
 			}
 			for i := range op.Parameters {
+				var shape struct {
+					Type string `json:"type"`
+				}
+				if facadeError = json.Unmarshal(op.Parameters[i].Schema, &shape); facadeError != nil {
+					return
+				}
+				op.Parameters[i].integer = shape.Type == "integer"
 				op.Parameters[i].validator, facadeError = compiler.Compile(fmt.Sprintf("%s#/operations/%s/parameters/%d/schema", location, id, i))
 				if facadeError != nil {
 					return
@@ -212,7 +222,18 @@ func ValidateFacadeRequest(in FacadeRequest) (*FacadeOperation, error) {
 		if len(values) == 0 && !p.Required {
 			continue
 		}
-		if len(values) != 1 || !utf8.ValidString(values[0]) || p.validator.Validate(values[0]) != nil {
+		if len(values) != 1 || !utf8.ValidString(values[0]) {
+			return nil, errors.New("invalid Auth parameter")
+		}
+		var value any = values[0]
+		if p.integer {
+			n, err := strconv.ParseInt(values[0], 10, 64)
+			if err != nil || strconv.FormatInt(n, 10) != values[0] {
+				return nil, errors.New("invalid Auth integer parameter")
+			}
+			value = json.Number(values[0])
+		}
+		if p.validator.Validate(value) != nil {
 			return nil, errors.New("invalid Auth parameter")
 		}
 	}
@@ -262,6 +283,17 @@ func (op *FacadeOperation) ValidateResponse(in FacadeRequest, data []byte) error
 		return err
 	}
 	params, _ := matchFacadePath(op.Path, in.Path)
+	if op.id == "resendInvitationLink" {
+		if err := matchFacadeIdentity(value, "resourceID", params["invitationID"]); err != nil {
+			return err
+		}
+		var receipt struct {
+			MailJobs []json.RawMessage `json:"mailJobs"`
+		}
+		if json.Unmarshal(data, &receipt) != nil || len(receipt.MailJobs) != 1 {
+			return errors.New("invitation link receipt must contain one job")
+		}
+	}
 	if op.id == "deleteRestaurant" {
 		var result struct {
 			RestaurantIDs []string `json:"restaurantIDs"`
