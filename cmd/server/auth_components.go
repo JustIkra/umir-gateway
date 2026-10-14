@@ -59,12 +59,10 @@ func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/v2/r/", scoped)
-	mux.Handle("/api/v2/orgs/", scoped)
+	mux.Handle("/api/v2/orgs/{orgID}/analytics/summary", scoped)
 	mux.Handle("/api/v2/feedback/anonymous", scoped)
 	mux.Handle("/api/operator/", api)
-	for _, path := range []string{"/csrf", "/session", "/me", "/me/display-name", "/me/password"} {
-		mux.Handle("/api/v2"+path, api)
-	}
+	mux.Handle("/api/v2/", api)
 	refuseUnscoped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		outcome := "not_committed"
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {

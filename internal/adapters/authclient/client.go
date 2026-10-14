@@ -94,8 +94,6 @@ func unavailable(method string, cause error) *operatorhttp.AuthFailure {
 }
 
 func (c *Client) call(ctx context.Context, method, path string, browser operatorhttp.BrowserContext, input any, status int, result any, validate func([]byte) error) error {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
 	var body []byte
 	if input != nil {
 		var err error
@@ -104,15 +102,45 @@ func (c *Client) call(ctx context.Context, method, path string, browser operator
 			return unavailable(method, err)
 		}
 	}
+	return c.exchange(ctx, method, path, "", browser, body, status, result, validate, decodeFailure, true)
+}
+
+func (c *Client) Public(ctx context.Context, browser operatorhttp.BrowserContext, in operatorhttp.FacadeRequest) (json.RawMessage, error) {
+	op, err := operatorhttp.ValidateFacadeRequest(in)
+	if err != nil {
+		return nil, unavailable(in.Method, err)
+	}
+	var result json.RawMessage
+	err = c.exchange(ctx, in.Method, strings.TrimPrefix(in.Path, "/api/v2"), in.RawQuery, browser, in.Body, op.Status, &result, func(data []byte) error {
+		if err := op.ValidateResponse(in, data); err != nil {
+			return err
+		}
+		switch in.Path {
+		case "/api/v2/csrf":
+			return validateCSRF(data)
+		case "/api/v2/session":
+			return validateIssued(data)
+		}
+		if strings.HasSuffix(op.Path, "/complete") {
+			return validateIssued(data)
+		}
+		return nil
+	}, decodeFacadeFailure, false)
+	return result, err
+}
+
+func (c *Client) exchange(ctx context.Context, method, path, query string, browser operatorhttp.BrowserContext, body []byte, status int, result any, validate func([]byte) error, decodeError func([]byte, int) (*operatorhttp.AuthFailure, error), requireRetryAfter bool) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	target := c.target
-	target.Path, target.RawPath = "/internal/auth/v1/public"+path, ""
+	target.Path, target.RawPath, target.RawQuery = "/internal/auth/v1/public"+path, "", query
 	r, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return unavailable(method, err)
 	}
 	r.Header.Set("X-Umir-Service-Key", c.key)
 	r.Header.Set("Accept", "application/json")
-	if input != nil {
+	if len(body) != 0 {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	for key, value := range map[string]string{"X-Umir-Session": browser.SessionToken, "X-Umir-Preauth": browser.PreauthToken, "X-Umir-CSRF-Token": browser.CSRFToken, "X-Umir-Activity": browser.Activity} {
@@ -145,7 +173,7 @@ func (c *Client) call(ctx context.Context, method, path string, browser operator
 		return unavailable(method, errors.New("unexpected Auth response type"))
 	}
 	if response.StatusCode != status {
-		failure, err := decodeFailure(data, response.StatusCode)
+		failure, err := decodeError(data, response.StatusCode)
 		if err != nil {
 			return unavailable(method, err)
 		}
@@ -156,7 +184,7 @@ func (c *Client) call(ctx context.Context, method, path string, browser operator
 			}
 			failure.RetryAfter = seconds
 		}
-		if failure.Status == http.StatusTooManyRequests && failure.RetryAfter == 0 {
+		if requireRetryAfter && failure.Status == http.StatusTooManyRequests && failure.RetryAfter == 0 {
 			return unavailable(method, errInvalidResult)
 		}
 		return failure

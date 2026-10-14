@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Connect all 29 frozen Auth facade operations in the executable Gateway, including
+  access, organizations, settings, memberships, invitations, email challenges,
+  logout-all and command recovery. Validate the complete wire projection, canonical
+  scope and nested response identities. Keep session/preauth tokens in protected
+  cookies, preserve uncertain commands without replay and retain scoped business
+  routing. Add a reproducible contract projection and real-service HTTP runner.
+
 - Compute private runtime readiness from a validated Auth registry projection and local registrations without an Auth callback. Expire the projection after five seconds or a later failed read, preserve response ordering and copy isolation, and remove the circular status/acknowledgment dependency. Keep signed, epoch-bound registration and fresh business authorization checks.
 
 - Refresh the exact reviewed observation schema. Use the fixture-only ECMAScript compiler hook with regexp2 v1.11.0, bounded per-call matching, asserted formats and enclosing validation failure on regex errors. Preserve Gateway unsupported Feedback behavior. Register regexp2 only for fixture-protocol in lint and architecture policy. Verify protocol acceptance and production/server/control rejection through the effective quality gates.

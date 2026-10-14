@@ -1,0 +1,2119 @@
+{
+  "source": {
+    "publicSHA256": "e710150288d650965cfee80b7cb623f5466583c03da9edf5561f94d127970897",
+    "privateSHA256": "f1a46a199c5c616523ff24ed0c43a0ae92b43edd93e1264a854fd766030aa1c1"
+  },
+  "operations": {
+    "csrf": {
+      "path": "/api/v2/csrf",
+      "method": "GET",
+      "status": 200,
+      "parameters": [],
+      "response": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/CsrfTokenView"
+          },
+          {
+            "$ref": "#/components/schemas/PreauthIssued"
+          }
+        ]
+      }
+    },
+    "login": {
+      "path": "/api/v2/session",
+      "method": "POST",
+      "status": 200,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/LoginRequestV2"
+      },
+      "response": {
+        "$ref": "#/components/schemas/SessionIssued"
+      }
+    },
+    "logout": {
+      "path": "/api/v2/session",
+      "method": "DELETE",
+      "status": 204,
+      "parameters": []
+    },
+    "logoutAll": {
+      "path": "/api/v2/sessions/logout-all",
+      "method": "POST",
+      "status": 200,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
+      }
+    },
+    "me": {
+      "path": "/api/v2/me",
+      "method": "GET",
+      "status": 200,
+      "parameters": [],
+      "response": {
+        "$ref": "#/components/schemas/UserView"
+      }
+    },
+    "displayName": {
+      "path": "/api/v2/me/display-name",
+      "method": "PATCH",
+      "status": 200,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/DisplayNameRequestV2"
+      },
+      "response": {
+        "$ref": "#/components/schemas/User"
+      }
+    },
+    "password": {
+      "path": "/api/v2/me/password",
+      "method": "PATCH",
+      "status": 204,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/PasswordChangeRequestV2"
+      }
+    },
+    "access": {
+      "path": "/api/v2/access",
+      "method": "GET",
+      "status": 200,
+      "parameters": [],
+      "response": {
+        "$ref": "#/components/schemas/AccessView"
+      }
+    },
+    "createOrganization": {
+      "path": "/api/v2/orgs",
+      "method": "POST",
+      "status": 201,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/CreateOrganization"
+      },
+      "response": {
+        "$ref": "#/components/schemas/LifecycleResult"
+      }
+    },
+    "organization": {
+      "path": "/api/v2/orgs/{orgID}",
+      "method": "GET",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/Organization"
+      }
+    },
+    "deleteOrganization": {
+      "path": "/api/v2/orgs/{orgID}",
+      "method": "DELETE",
+      "status": 202,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/LifecycleResult"
+      }
+    },
+    "updateSettings": {
+      "path": "/api/v2/orgs/{orgID}/settings",
+      "method": "PATCH",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/UpdateSettings"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Organization"
+      }
+    },
+    "createRestaurant": {
+      "path": "/api/v2/orgs/{orgID}/restaurants",
+      "method": "POST",
+      "status": 201,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/CreateRestaurant"
+      },
+      "response": {
+        "$ref": "#/components/schemas/LifecycleResult"
+      }
+    },
+    "deleteRestaurant": {
+      "path": "/api/v2/orgs/{orgID}/restaurants/{restaurantID}",
+      "method": "DELETE",
+      "status": 202,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "restaurantID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/LifecycleResult"
+      }
+    },
+    "lifecycle": {
+      "path": "/api/v2/orgs/{orgID}/lifecycle/{operationID}",
+      "method": "GET",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "operationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/LifecycleResult"
+      }
+    },
+    "updateMembership": {
+      "path": "/api/v2/orgs/{orgID}/memberships/{membershipID}",
+      "method": "PUT",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "membershipID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/UpdateMembership"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Membership"
+      }
+    },
+    "revokeMembership": {
+      "path": "/api/v2/orgs/{orgID}/memberships/{membershipID}",
+      "method": "DELETE",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "membershipID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/RevokeMembership"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
+      }
+    },
+    "revokeAssignment": {
+      "path": "/api/v2/orgs/{orgID}/memberships/{membershipID}/assignments/{assignmentID}",
+      "method": "DELETE",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "membershipID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "assignmentID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/RevokeAssignment"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
+      }
+    },
+    "createInvitation": {
+      "path": "/api/v2/orgs/{orgID}/invitations",
+      "method": "POST",
+      "status": 201,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/CreateInvitation"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Invitation"
+      }
+    },
+    "resendInvitation": {
+      "path": "/api/v2/orgs/{orgID}/invitations/{invitationID}/resend",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "invitationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
+      }
+    },
+    "cancelInvitation": {
+      "path": "/api/v2/orgs/{orgID}/invitations/{invitationID}",
+      "method": "DELETE",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "orgID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        {
+          "name": "invitationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/DurableResult"
+      }
+    },
+    "beginInvitationChallenge": {
+      "path": "/api/v2/invitations/{invitationID}/challenges",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "invitationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/ChallengeBegin"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Challenge"
+      }
+    },
+    "resendChallenge": {
+      "path": "/api/v2/challenges/{challengeID}/resend",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "challengeID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/Command"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Challenge"
+      }
+    },
+    "verifyChallenge": {
+      "path": "/api/v2/challenges/{challengeID}/verify",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "challengeID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/ChallengeVerify"
+      },
+      "response": {
+        "$ref": "#/components/schemas/VerifiedChallenge"
+      }
+    },
+    "completeInvitedUser": {
+      "path": "/api/v2/challenges/{challengeID}/complete",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "challengeID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/ChallengeComplete"
+      },
+      "response": {
+        "$ref": "#/components/schemas/SessionIssued"
+      }
+    },
+    "acceptInvitation": {
+      "path": "/api/v2/invitations/{invitationID}/accept",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "invitationID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/AcceptInvitation"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Membership"
+      }
+    },
+    "authCommandLookup": {
+      "path": "/api/v2/commands",
+      "method": "GET",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "namespace",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        {
+          "name": "commandID",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/IdempotencyResult"
+      }
+    },
+    "beginEmailChallenge": {
+      "path": "/api/v2/email-challenges",
+      "method": "POST",
+      "status": 200,
+      "parameters": [],
+      "request": {
+        "$ref": "#/components/schemas/EmailChallengeBegin"
+      },
+      "response": {
+        "$ref": "#/components/schemas/Challenge"
+      }
+    },
+    "completeEmailChallenge": {
+      "path": "/api/v2/email-challenges/{challengeID}/complete",
+      "method": "POST",
+      "status": 200,
+      "parameters": [
+        {
+          "name": "challengeID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "request": {
+        "$ref": "#/components/schemas/EmailChallengeComplete"
+      },
+      "response": {
+        "$ref": "#/components/schemas/SessionIssued"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CsrfTokenView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "csrfToken"
+        ],
+        "properties": {
+          "csrfToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "PreauthIssued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "csrfToken",
+          "preauthToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "csrfToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "preauthToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "Instant": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.[0-9]{1,9})?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$",
+        "description": "RFC3339 instant with seconds, valid calendar date and explicit offset. No leap seconds. Offset need not match the organization zone."
+      },
+      "LoginRequestV2": {
+        "type": "object",
+        "description": "Exact case-sensitive fields; unknown fields are rejected.",
+        "additionalProperties": false,
+        "required": [
+          "login",
+          "password",
+          "commandID"
+        ],
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "description": "Sent as typed; never trimmed or normalized."
+          },
+          "rememberMe": {
+            "type": "boolean",
+            "default": false,
+            "description": "true opens a fixed 30-day session; activity never extends it."
+          },
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          }
+        }
+      },
+      "ClientCommandID": {
+        "type": "string",
+        "minLength": 1,
+        "not": {
+          "pattern": "^expiration/"
+        },
+        "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse."
+      },
+      "SessionIssued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "view",
+          "sessionToken"
+        ],
+        "properties": {
+          "view": {
+            "$ref": "#/components/schemas/UserView"
+          },
+          "sessionToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "user",
+          "session"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "userID",
+          "login",
+          "displayName",
+          "credentialVersion"
+        ],
+        "properties": {
+          "userID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "login": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "credentialVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "EntityID": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "description": "Auth-generated canonical UUIDv4. Global identities and tombstoned IDs are never reused."
+      },
+      "Version": {
+        "$ref": "#/components/schemas/PositiveInt64"
+      },
+      "PositiveInt64": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 19,
+        "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807)$",
+        "description": "Canonical decimal integer from 1 through 9223372036854775807. No sign, leading zero, exponent or fractional part. Keep as a string or BigInt in JavaScript."
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expiresAt",
+          "idleExpiresAt",
+          "absoluteExpiresAt",
+          "rememberMe",
+          "csrfToken"
+        ],
+        "properties": {
+          "expiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "idleExpiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "absoluteExpiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "rememberMe": {
+            "type": "boolean"
+          },
+          "csrfToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "Command": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          }
+        }
+      },
+      "DurableResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "outcome",
+          "aggregateRevision",
+          "resourceID",
+          "mailJobs"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "outcome": {
+            "type": "string",
+            "const": "committed"
+          },
+          "aggregateRevision": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "resourceID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "mailJobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailJob"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        }
+      },
+      "MailJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "jobID",
+          "state",
+          "attempts",
+          "acceptedAt"
+        ],
+        "properties": {
+          "jobID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "sending",
+              "sent",
+              "retry",
+              "unknown",
+              "failed",
+              "suppressed"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "acceptedAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "nextAttemptAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "DisplayNameRequestV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "displayName",
+          "commandID"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          }
+        }
+      },
+      "PasswordChangeRequestV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "currentPassword",
+          "newPassword",
+          "commandID"
+        ],
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "Sent as typed; never trimmed or normalized. Outside an active cooldown and after newPassword passes field validation, a value over 32 Unicode code points is rejected before credential verification without consuming the failed-check counter or revoking a session."
+          },
+          "newPassword": {
+            "type": "string",
+            "description": "8 to 32 Unicode code points; not trimmed, normalized or truncated."
+          },
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          }
+        }
+      },
+      "AccessView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "organizations",
+          "restaurants",
+          "memberships"
+        ],
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Organization"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "restaurants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Restaurant"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        }
+      },
+      "Organization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orgID",
+          "name",
+          "settings",
+          "lifecycle",
+          "lifecycleVersion"
+        ],
+        "properties": {
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deleting",
+              "deleted"
+            ]
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "Settings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "timeZone",
+          "settingsVersion"
+        ],
+        "properties": {
+          "timeZone": {
+            "$ref": "#/components/schemas/TimeZone"
+          },
+          "settingsVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "TimeZone": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Loadable IANA zone. Auth validates packaged data; no Local/fixed-offset fallback."
+      },
+      "Restaurant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurantID",
+          "orgID",
+          "name",
+          "lifecycle",
+          "lifecycleVersion"
+        ],
+        "properties": {
+          "restaurantID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": [
+              "registering",
+              "ready",
+              "deleting",
+              "deleted"
+            ]
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "Membership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membershipID",
+          "membershipVersion",
+          "userID",
+          "orgID",
+          "orgRoles",
+          "assignments",
+          "state"
+        ],
+        "properties": {
+          "membershipID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "membershipVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "userID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "orgRoles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgRole"
+            },
+            "minItems": 0,
+            "maxItems": 1,
+            "uniqueItems": true
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assignment"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          }
+        }
+      },
+      "OrgRole": {
+        "type": "string",
+        "enum": [
+          "Admin"
+        ]
+      },
+      "Assignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurantID",
+          "assignmentID",
+          "assignmentVersion",
+          "roles"
+        ],
+        "properties": {
+          "restaurantID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "assignmentID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "assignmentVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "roles": {
+            "$ref": "#/components/schemas/Roles"
+          }
+        }
+      },
+      "Roles": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/Role"
+        },
+        "minItems": 1,
+        "maxItems": 2,
+        "uniqueItems": true
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "Warehouse",
+          "Waiter"
+        ]
+      },
+      "CreateOrganization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "name",
+          "timeZone",
+          "firstRestaurantName"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/TimeZone"
+          },
+          "firstRestaurantName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "LifecycleResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationID",
+          "commandID",
+          "orgID",
+          "restaurantIDs",
+          "lifecycle",
+          "lifecycleVersion",
+          "cleanup",
+          "services"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "restaurantIDs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityID"
+            },
+            "minItems": 0,
+            "maxItems": 10000,
+            "uniqueItems": true
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": [
+              "registering",
+              "ready",
+              "deleting",
+              "deleted"
+            ]
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "cleanup": {
+            "type": "string",
+            "enum": [
+              "not_required",
+              "pending",
+              "complete"
+            ]
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LifecyclePeerReadiness"
+            },
+            "minItems": 0,
+            "maxItems": 30000,
+            "description": "Exactly one entry per (restaurantID, service) for every affected restaurant and each of warehouse, serving, gateway. Unacknowledged peers are pending. No omitted or duplicate pair; lifecycle=deleted requires all closed in current peer epochs. See relational rules in backend-v2.md. Pending may omit epoch only when peer status is unavailable; that pair cannot satisfy ready or cleanup-complete."
+          },
+          "operationID": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        "description": "operationID is an immutable UUIDv4 issued and persisted by Auth with acceptance, independently of opaque commandID. Exact replay and Auth command recovery return the same accepted result. Polling returns current peer readiness for that operation, including after scoped cutoff."
+      },
+      "LifecyclePeerReadiness": {
+        "description": "One affected restaurant/service pair. Pending includes epoch when current peer status is known; omit epoch if status is unavailable, never invent one. Ready/closed requires the exact current acknowledged peer epoch. Runtime register/close replies still require epoch via RuntimeReadiness.",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "restaurantID",
+              "service",
+              "state",
+              "lifecycleVersion"
+            ],
+            "properties": {
+              "service": {
+                "type": "string",
+                "enum": [
+                  "warehouse",
+                  "serving",
+                  "gateway"
+                ]
+              },
+              "epoch": {
+                "$ref": "#/components/schemas/Epoch"
+              },
+              "state": {
+                "const": "pending"
+              },
+              "lifecycleVersion": {
+                "$ref": "#/components/schemas/Version"
+              },
+              "restaurantID": {
+                "$ref": "#/components/schemas/EntityID"
+              }
+            },
+            "description": "Unacknowledged restaurant/service pair. Epoch is supplied only when current peer status is known; unavailable status stays pending without an invented epoch."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "restaurantID",
+              "service",
+              "epoch",
+              "state",
+              "lifecycleVersion"
+            ],
+            "properties": {
+              "service": {
+                "type": "string",
+                "enum": [
+                  "warehouse",
+                  "serving",
+                  "gateway"
+                ]
+              },
+              "epoch": {
+                "$ref": "#/components/schemas/Epoch"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "closed"
+                ]
+              },
+              "lifecycleVersion": {
+                "$ref": "#/components/schemas/Version"
+              },
+              "restaurantID": {
+                "$ref": "#/components/schemas/EntityID"
+              }
+            },
+            "description": "Readiness for one explicit restaurant and service, bound to lifecycleVersion and exact peer epoch. Registry envelope restaurantID and runtime route restaurantID must agree with this value."
+          }
+        ]
+      },
+      "Epoch": {
+        "$ref": "#/components/schemas/EntityID"
+      },
+      "UpdateSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "expectedSettingsVersion",
+          "timeZone"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "expectedSettingsVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/TimeZone"
+          }
+        }
+      },
+      "CreateRestaurant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "name"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "UpdateMembership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "expectedMembershipVersion",
+          "orgRoles",
+          "assignments"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "expectedMembershipVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "orgRoles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgRole"
+            },
+            "minItems": 0,
+            "maxItems": 1,
+            "uniqueItems": true
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "restaurantID",
+                "roles"
+              ],
+              "properties": {
+                "restaurantID": {
+                  "$ref": "#/components/schemas/EntityID"
+                },
+                "roles": {
+                  "$ref": "#/components/schemas/Roles"
+                }
+              }
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        }
+      },
+      "RevokeMembership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "expectedMembershipVersion"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "expectedMembershipVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "RevokeAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "expectedAssignmentVersion"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "expectedAssignmentVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "CreateInvitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "email",
+          "assignments"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "restaurantID",
+                "roles"
+              ],
+              "properties": {
+                "restaurantID": {
+                  "$ref": "#/components/schemas/EntityID"
+                },
+                "roles": {
+                  "$ref": "#/components/schemas/Roles"
+                }
+              }
+            },
+            "minItems": 1,
+            "maxItems": 500
+          }
+        }
+      },
+      "Email": {
+        "type": "string",
+        "format": "email",
+        "maxLength": 254
+      },
+      "Invitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "invitationID",
+          "orgID",
+          "email",
+          "comparisonEmail",
+          "assignments",
+          "expiresAt",
+          "resendAvailableAt",
+          "state",
+          "version"
+        ],
+        "properties": {
+          "invitationID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "comparisonEmail": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "restaurantID",
+                "roles"
+              ],
+              "properties": {
+                "restaurantID": {
+                  "$ref": "#/components/schemas/EntityID"
+                },
+                "roles": {
+                  "$ref": "#/components/schemas/Roles"
+                }
+              }
+            },
+            "minItems": 1,
+            "maxItems": 500
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "resendAvailableAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "expired",
+              "revoked",
+              "suppressed"
+            ]
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      },
+      "ChallengeBegin": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "invitationID"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "invitationID": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      },
+      "Challenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "challengeID",
+          "expiresAt",
+          "resendAvailableAt",
+          "state"
+        ],
+        "properties": {
+          "challengeID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "resendAvailableAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "verified",
+              "completed",
+              "expired",
+              "locked"
+            ]
+          }
+        }
+      },
+      "ChallengeVerify": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "challengeID",
+          "code"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "challengeID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          }
+        }
+      },
+      "VerifiedChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "challenge",
+          "proof",
+          "retainUntil"
+        ],
+        "properties": {
+          "challenge": {
+            "$ref": "#/components/schemas/Challenge"
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retainUntil": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "ChallengeComplete": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "challengeID",
+          "proof",
+          "password",
+          "displayName"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "challengeID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 32
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          }
+        }
+      },
+      "AcceptInvitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "challengeID",
+          "proof"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "challengeID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ID": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Opaque identifier. Unicode and reserved characters are allowed. Percent-encode query values; do not require UUID syntax."
+      },
+      "IdempotencyResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "state",
+              "commandID",
+              "operationID",
+              "httpStatus",
+              "response",
+              "aggregateRevision",
+              "requiresSessionRestore"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "completed"
+              },
+              "commandID": {
+                "$ref": "#/components/schemas/ClientCommandID"
+              },
+              "operationID": {
+                "type": "string",
+                "minLength": 1
+              },
+              "httpStatus": {
+                "type": "integer",
+                "enum": [
+                  200,
+                  201,
+                  202,
+                  204
+                ]
+              },
+              "response": {
+                "$ref": "#/components/schemas/AuthStoredResponse"
+              },
+              "aggregateRevision": {
+                "$ref": "#/components/schemas/Version"
+              },
+              "requiresSessionRestore": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "unseen"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "unknown"
+              }
+            }
+          }
+        ]
+      },
+      "AuthStoredResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "UserView"
+              },
+              "body": {
+                "$ref": "#/components/schemas/UserView"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "User"
+              },
+              "body": {
+                "$ref": "#/components/schemas/User"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "Organization"
+              },
+              "body": {
+                "$ref": "#/components/schemas/Organization"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "Membership"
+              },
+              "body": {
+                "$ref": "#/components/schemas/Membership"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "Invitation"
+              },
+              "body": {
+                "$ref": "#/components/schemas/Invitation"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "Challenge"
+              },
+              "body": {
+                "$ref": "#/components/schemas/Challenge"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "VerifiedChallenge"
+              },
+              "body": {
+                "$ref": "#/components/schemas/VerifiedChallenge"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "DurableResult"
+              },
+              "body": {
+                "$ref": "#/components/schemas/DurableResult"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "body"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "LifecycleResult"
+              },
+              "body": {
+                "$ref": "#/components/schemas/LifecycleResult"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "NoContent"
+              }
+            }
+          }
+        ]
+      },
+      "EmailChallengeBegin": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "email",
+          "purpose"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "email": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "login",
+              "password_reset"
+            ]
+          }
+        }
+      },
+      "EmailChallengeComplete": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "commandID",
+          "challengeID",
+          "proof",
+          "purpose"
+        ],
+        "properties": {
+          "commandID": {
+            "$ref": "#/components/schemas/ClientCommandID"
+          },
+          "challengeID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "login",
+              "password_reset"
+            ]
+          },
+          "rememberMe": {
+            "type": "boolean"
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 32
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "outcome",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "InvalidArgument",
+              "Unauthenticated",
+              "InvalidOrigin",
+              "InvalidCsrfToken",
+              "Forbidden",
+              "AuthUnavailable",
+              "AuthStorageUnavailable",
+              "AuthUpdateOutcomeUnknown",
+              "CommandConflict",
+              "LastAdmin",
+              "ScopeDeleted",
+              "RuntimeNotReady",
+              "RuntimeReset",
+              "SettingsChanged",
+              "UnknownTimeZone",
+              "TimeZoneDataUnavailable",
+              "AmbiguousLocalTime",
+              "NonexistentLocalTime",
+              "SkippedDate",
+              "RefreshRequired",
+              "UnknownEventSchema",
+              "CalculationUnavailable",
+              "ProductConflict",
+              "DishConflict",
+              "BatchNotFound",
+              "NotPendingWriteoff",
+              "AlreadyWrittenOff",
+              "InvitationExpired",
+              "InvitationRevoked",
+              "RateLimited",
+              "ChallengeLocked",
+              "InvalidProof",
+              "DeliveryUnavailable",
+              "UpstreamUnavailable",
+              "InvalidRequest",
+              "InvalidCredentials",
+              "CurrentPasswordIncorrect",
+              "NotFound",
+              "MethodNotAllowed",
+              "PayloadTooLarge",
+              "UnsupportedMediaType",
+              "InvalidDisplayName",
+              "PasswordRejected",
+              "LoginRateLimited",
+              "PasswordChangeRateLimited",
+              "FeedbackRateLimited",
+              "SessionStorageUnavailable",
+              "SessionUpdateOutcomeUnknown",
+              "AccountStorageUnavailable",
+              "AccountUpdateOutcomeUnknown",
+              "ProposalNotFound",
+              "InventoryUnavailable",
+              "TechnicalError",
+              "UpstreamTimeout",
+              "ServiceUnavailable",
+              "InvalidToken",
+              "LimitExceeded"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "expectedEpoch": {
+                "$ref": "#/components/schemas/Epoch"
+              },
+              "currentEpoch": {
+                "$ref": "#/components/schemas/Epoch"
+              },
+              "currentSettings": {
+                "$ref": "#/components/schemas/Settings"
+              },
+              "refreshRequired": {
+                "type": "boolean"
+              },
+              "retryAfterSeconds": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "scopeID": {
+                "$ref": "#/components/schemas/EntityID"
+              }
+            }
+          },
+          "fieldErrors": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "login": {
+                "type": "string"
+              },
+              "password": {
+                "type": "string"
+              },
+              "currentPassword": {
+                "type": "string"
+              },
+              "newPassword": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              }
+            }
+          },
+          "sessionRevoked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Outcome": {
+        "type": "string",
+        "enum": [
+          "committed",
+          "not_committed",
+          "unknown",
+          "unavailable",
+          "indeterminate"
+        ]
+      }
+    }
+  }
+}

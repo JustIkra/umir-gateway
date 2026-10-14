@@ -65,6 +65,7 @@ deps:
     mayDependOn: [accountfile, operator, strictjson]
   operatorhttp:
     mayDependOn: [operatorhttp, operator, httpapi, strictjson]
+    canUse: [jsonschema]
   livecursor:
     mayDependOn: [livecursor, journal]
   authclient:

@@ -90,8 +90,71 @@ Real five-service acceptance belongs to J1/E.
 
 Verify G1 with `GOWORK=off go test -race ./internal/operatorhttp/...
 ./internal/adapters/... ./cmd/server/... ./tests/integration/...` (one command).
-The integration directory uses only Auth HTTP transport doubles. Run `make check`
+The Go integration suite uses Auth HTTP transport doubles. Run `make check`
 for the full pinned module gates and `make quality-test` after enforcement changes.
+
+### Complete backend v2 Auth facade
+
+Auth mode routes all 29 frozen Auth operations through the executable Gateway.
+This includes access discovery, organization and restaurant lifecycle, settings,
+membership changes, invitation and email challenges, logout-all and command lookup.
+Organization analytics and restaurant business routes retain their scoped handlers.
+The operator aliases retain their existing five paths and wire models.
+
+The embedded [Auth contract](internal/operatorhttp/auth-contract.json) is a projection
+of Factory's public/private v2 documents at checkpoint
+`66b827cf49fa70777dcba7b54fb7a3d05e64407c`. It records both source hashes. Regenerate it
+with Node 24 and compare the output before changing a contract:
+
+```sh
+node scripts/sync-auth-contract.mjs /path/to/factory/docs/api/backend-v2-public.json \
+  /path/to/factory/docs/api/backend-v2-private.json internal/operatorhttp/auth-contract.json
+```
+
+Gateway rejects unknown or duplicate fields at every JSON depth, invalid path/body
+identities, unsupported queries, duplicate browser cookies and internal credentials.
+Command lookup permits only one `namespace` and one `commandID`, preserving their
+original encoded values. The namespace remains Auth's opaque canonical value.
+Successful and error responses are validated before projection. Response identities
+must match the request, including nested challenge IDs and the one restaurant of a
+restaurant deletion. Email validation preserves the Auth protocol's ASCII address
+grammar, dotted domain and 254-character bound.
+
+Session-issued replies install the session in an HttpOnly, SameSite=Strict cookie.
+Their public body contains only UserView. Preauth issuance likewise returns only the
+public CSRF token. Successful logout, logout-all and password changes clear the
+session cookie. Uncertain changes install or clear no success cookie and perform no
+automatic replay. Clients retain command identity, original input and scope.
+V2 rate-limit errors preserve the frozen Auth response even when it contains no
+Retry-After; an included header or delay detail must be consistent and valid.
+
+In Auth/v2 topology, set `WAREHOUSE_URL` to the Warehouse private listener, usually
+`http://warehouse:8082`. Its public port 8080 serves health only. The legacy topology
+still uses the public Warehouse listener described below.
+
+The real-service runner requires an isolated synthetic stand, Node 24, a local
+Mailpit receiver and a private JSON credentials file containing `login` and
+`password`. It reads no provider environment variables. It uses public Gateway
+HTTP for setup, real Auth cookies/CSRF and synthetic OTP mail. No Auth store, JWT or
+membership is fabricated. Credentials and state files must be private; retain the
+state directory on failure. Reports contain status/coverage only.
+
+```sh
+node tests/integration/auth-facade.mjs --origin http://127.0.0.1:18880 \
+  --mailpit http://127.0.0.1:18825 --credentials /private/credentials.json \
+  --state-dir /private/facade-run
+```
+
+The runner creates synthetic organizations/users and deletes one organization after
+checking its lifecycle. It preserves another organization to verify scope isolation.
+Use it only on a disposable test stand. A retained run resumes completed setup;
+expired session/challenge bindings require inspection before another attempt.
+This HTTP matrix does not establish browser acceptance or full Factory J1/E/J2.
+
+After the full matrix, add `--phase password-limit` with the same arguments to
+check the fifth incorrect-password revocation and the sibling-session cooldown.
+The phase report keeps retained rows on resume and states how many fresh HTTP
+requests ran. A reused report is historical evidence, not a new runtime run.
 
 ### Backend v2 restaurant authorization (G2)
 

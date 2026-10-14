@@ -46,16 +46,11 @@ func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
 
 func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	prefix := "/api/operator"
-	alias := strings.HasPrefix(r.URL.Path, prefix+"/")
-	requestAPI := *a
-	boundary := *a.boundary
-	boundary.v2 = !alias
-	requestAPI.boundary = &boundary
-	a = &requestAPI
-	if !alias {
-		prefix = "/api/v2"
+	if strings.HasPrefix(r.URL.Path, "/api/v2/") {
+		a.serveFacade(w, r)
+		return
 	}
+	const prefix = "/api/operator"
 	path := strings.TrimPrefix(r.URL.Path, prefix)
 	allowed := map[string]string{
 		"/csrf": "GET, HEAD", "/session": "POST, DELETE", "/me": "GET, HEAD", "/me/display-name": "PATCH", "/me/password": "PATCH",
@@ -116,20 +111,10 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			var input LoginInput
-			keys := []string{"login", "password"}
-			if !alias {
-				keys = append(keys, "commandID")
-			}
-			if !a.decodeInput(w, r, &input, keys, []string{"rememberMe"}) {
+			if !a.decodeInput(w, r, &input, []string{"login", "password"}, []string{"rememberMe"}) {
 				return
 			}
-			if !alias && (input.CommandID == "" || strings.HasPrefix(input.CommandID, "expiration/")) {
-				a.boundary.problem(w, r, http.StatusBadRequest, "InvalidRequest", "login, password and operation identity are required")
-				return
-			}
-			if alias {
-				input.CommandID = a.newCommandID()
-			}
+			input.CommandID = a.newCommandID()
 			var issued SessionIssued
 			issued, err = a.auth.Login(r.Context(), browser, input)
 			if err == nil {
@@ -141,27 +126,21 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if browser.PreauthToken != "" {
 					a.boundary.clearCookie(w, a.boundary.cookies.preauth)
 				}
-				result = publicView(issued.View, alias)
+				result = operatorViewOf(issued.View)
 			}
 		}
 	case "/me":
 		var view AuthView
 		view, err = a.auth.Me(r.Context(), browser)
 		if err == nil {
-			result = publicView(view, alias)
+			result = operatorViewOf(view)
 		}
 	case "/me/display-name":
 		var input DisplayNameInput
-		keys := []string{"displayName"}
-		if !alias {
-			keys = append(keys, "commandID")
-		}
-		if !a.decodeInput(w, r, &input, keys, nil) {
+		if !a.decodeInput(w, r, &input, []string{"displayName"}, nil) {
 			return
 		}
-		if alias {
-			input.CommandID = a.newCommandID()
-		}
+		input.CommandID = a.newCommandID()
 		if input.CommandID == "" || strings.HasPrefix(input.CommandID, "expiration/") {
 			a.boundary.problem(w, r, http.StatusBadRequest, "InvalidRequest", "commandID is required")
 			return
@@ -169,23 +148,14 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var user AuthUser
 		user, err = a.auth.DisplayName(r.Context(), browser, input)
 		if err == nil {
-			result = user
-			if alias {
-				result = accountView{Operator: operatorView{ID: user.UserID, Login: user.Login, DisplayName: user.DisplayName}}
-			}
+			result = accountView{Operator: operatorView{ID: user.UserID, Login: user.Login, DisplayName: user.DisplayName}}
 		}
 	case "/me/password":
 		var input PasswordInput
-		keys := []string{"currentPassword", "newPassword"}
-		if !alias {
-			keys = append(keys, "commandID")
-		}
-		if !a.decodeInput(w, r, &input, keys, nil) {
+		if !a.decodeInput(w, r, &input, []string{"currentPassword", "newPassword"}, nil) {
 			return
 		}
-		if alias {
-			input.CommandID = a.newCommandID()
-		}
+		input.CommandID = a.newCommandID()
 		if input.CommandID == "" || strings.HasPrefix(input.CommandID, "expiration/") {
 			a.boundary.problem(w, r, http.StatusBadRequest, "InvalidRequest", "commandID is required")
 			return
@@ -198,7 +168,7 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		a.fail(w, r, err, alias, path)
+		a.fail(w, r, err, true, path)
 		return
 	}
 	a.boundary.writeJSON(w, r, http.StatusOK, result)
@@ -207,7 +177,7 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func forbiddenCredentials(r *http.Request) bool {
 	for key := range r.Header {
 		lower := strings.ToLower(key)
-		if lower == "authorization" || (strings.HasPrefix(lower, "x-umir-") && lower != strings.ToLower(ActivityHeader)) {
+		if lower == "authorization" || lower == "proxy-authorization" || lower == "x-service-key" || (strings.HasPrefix(lower, "x-umir-") && lower != strings.ToLower(ActivityHeader)) {
 			return true
 		}
 	}
@@ -215,11 +185,7 @@ func forbiddenCredentials(r *http.Request) bool {
 }
 
 func (a *RemoteAPI) decodeInput(w http.ResponseWriter, r *http.Request, input any, required, optional []string) bool {
-	limit := int64(maxBody)
-	if a.boundary.v2 {
-		limit = 1 << 20
-	}
-	body, ok := a.boundary.readJSON(w, r, limit)
+	body, ok := a.boundary.readJSON(w, r, maxBody)
 	if !ok {
 		return false
 	}
@@ -237,10 +203,7 @@ func (a *RemoteAPI) decodeInput(w http.ResponseWriter, r *http.Request, input an
 	return true
 }
 
-func publicView(view AuthView, alias bool) any {
-	if !alias {
-		return view
-	}
+func operatorViewOf(view AuthView) accountView {
 	s := view.Session
 	return accountView{Operator: operatorView{ID: view.User.UserID, Login: view.User.Login, DisplayName: view.User.DisplayName}, Session: &sessionView{
 		ExpiresAt: s.ExpiresAt.In(moscow).Format(time.RFC3339Nano), IdleExpiresAt: s.IdleExpiresAt.In(moscow).Format(time.RFC3339Nano), AbsoluteExpiresAt: s.AbsoluteExpiresAt.In(moscow).Format(time.RFC3339Nano), RememberMe: s.RememberMe, CSRFToken: s.CSRFToken,
@@ -284,6 +247,7 @@ func (a *RemoteAPI) fail(w http.ResponseWriter, r *http.Request, err error, alia
 		Message        string            `json:"message"`
 		Retryable      bool              `json:"retryable"`
 		FieldErrors    map[string]string `json:"fieldErrors,omitempty"`
+		Details        json.RawMessage   `json:"details,omitempty"`
 		SessionRevoked *bool             `json:"sessionRevoked,omitempty"`
-	}{Code: code, Outcome: failure.Outcome, Message: "authentication request failed", Retryable: failure.Retryable, FieldErrors: failure.FieldErrors, SessionRevoked: failure.SessionRevoked})
+	}{Code: code, Outcome: failure.Outcome, Message: "authentication request failed", Retryable: failure.Retryable, FieldErrors: failure.FieldErrors, Details: failure.Details, SessionRevoked: failure.SessionRevoked})
 }

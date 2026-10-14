@@ -2,6 +2,7 @@ package operatorhttp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -70,6 +71,14 @@ type AuthClient interface {
 	Me(context.Context, BrowserContext) (AuthView, error)
 	DisplayName(context.Context, BrowserContext, DisplayNameInput) (AuthUser, error)
 	Password(context.Context, BrowserContext, PasswordInput) error
+	Public(context.Context, BrowserContext, FacadeRequest) (json.RawMessage, error)
+}
+
+type FacadeRequest struct {
+	Method   string
+	Path     string
+	RawQuery string
+	Body     json.RawMessage
 }
 
 type AuthFailure struct {
@@ -79,6 +88,7 @@ type AuthFailure struct {
 	Retryable      bool
 	RetryAfter     int
 	FieldErrors    map[string]string
+	Details        json.RawMessage
 	SessionRevoked *bool
 	Cause          error
 }
