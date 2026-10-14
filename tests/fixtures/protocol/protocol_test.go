@@ -214,18 +214,7 @@ func TestClockRejectsFractionTruncation(t *testing.T) {
 	}
 }
 func TestPrivateFileModesAndSymlinkRejection(t *testing.T) {
-	dir, err := os.MkdirTemp("/private/tmp", "gi-files-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	}()
-	if err := os.Chown(dir, os.Getuid(), os.Getgid()); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateFileDir(t)
 	path := filepath.Join(dir, "key")
 	if err := os.WriteFile(path, []byte(strings.Repeat("a", 64)), 0400); err != nil {
 		t.Fatal(err)

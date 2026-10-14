@@ -168,7 +168,11 @@ func TestActualRunFailureStillCompletesWithoutReadiness(t *testing.T) {
 	}
 }
 func TestUnixControlSocketDACAndAuthentication(t *testing.T) {
-	root, err := os.MkdirTemp("/private/tmp", "gi-uds-")
+	base, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(base, "gi-uds-")
 	if err != nil {
 		t.Fatal(err)
 	}

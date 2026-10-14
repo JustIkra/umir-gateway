@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Use the resolved platform temporary directory in private-file and Unix-socket
+  fixture tests. Keep ownership, exact permissions and symlink rejection checks;
+  the macOS-only path previously failed on Linux CI.
+
 - Connect all 29 frozen Auth facade operations in the executable Gateway, including
   access, organizations, settings, memberships, invitations, email challenges,
   logout-all and command recovery. Validate the complete wire projection, canonical
