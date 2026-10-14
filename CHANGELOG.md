@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Publish the complete queued change burst before waking the SSE test reader.
+  Preserve the seq43 assertion and production stream/journal behavior; the
+  previous test depended on goroutine scheduling between two notifications.
+
+- Add the UA1 batch, member and invitation reads and resend-link facade.
+  Validate nested owner identities, strict queries and invitation receipt targets;
+  preserve collection errors and uncertain commands without retry.
+- Generate reproducible Auth and scoped projections from the composed UA1 profile.
+
 - Use the resolved platform temporary directory in private-file and Unix-socket
   fixture tests. Keep ownership, exact permissions and symlink rejection checks;
   the macOS-only path previously failed on Linux CI.

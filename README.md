@@ -815,3 +815,18 @@ The approved Feedback discovery overlay
 adds no Gateway credential or caller authority. Gateway retains its exact five
 service credential references and separate control credential. Source/profile
 handoff is separate from actual Auth/Feedback provisioning and J1/E acceptance.
+
+## UA1 additive API profile
+
+The UA1 projection adds GET /api/v2/r/{restaurantID}/warehouse/products/{productID}/batches, GET /api/v2/orgs/{orgID}/members, GET /api/v2/orgs/{orgID}/invitations and POST /api/v2/orgs/{orgID}/invitations/{invitationID}/resend-link. Batch reads require stock.read; organization collections and link administration require current own-org Admin authority. Warehouse and Auth own cursor state, FEFO and mail decisions.
+
+Gateway keeps browser cookie, Origin and CSRF guards, forwards the retained command and query once, and verifies nested scope/product/capture identities. Auth collection RefreshRequired 409, LimitExceeded 503 and ScopeDeleted 410 retain their owner metadata. Link resend receipts must match the route invitation resourceID. Owner or transport uncertainty never generates a new command or automatic retry.
+
+Generate Factory's composed UA1 public/private profiles first. Regenerate the Gateway projections with:
+
+~~~sh
+node scripts/sync-auth-contract.mjs PUBLIC PRIVATE internal/operatorhttp/auth-contract.json
+node scripts/sync-scoped-contract.mjs PUBLIC internal/httpapi/scoped-contract.json
+~~~
+
+PUBLIC and PRIVATE are the composed profile paths, not the original frozen C2 inputs. Both projections record the exact input SHA-256. The scoped compiler keeps its explicit operation/capability/owner bindings. Original C2 schemas and all67 evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.

@@ -204,11 +204,19 @@ func (op *scopeOperation) validateInput(r *http.Request, body []byte, tenant str
 		}
 	}
 	known := map[string]bool{}
+	pathValues, ok := op.pathParameters(r.URL)
+	if !ok {
+		return nil, errors.New("invalid route parameters")
+	}
 	for _, p := range op.Parameters {
 		var values []string
 		switch p.In {
 		case "path":
-			values = []string{tenant}
+			value := pathValues[p.Name]
+			if (p.Name == "restaurantID" || p.Name == "orgID") && value != tenant {
+				return nil, errors.New("scope parameter mismatch")
+			}
+			values = []string{value}
 		case "query":
 			known[p.Name] = true
 			values = query[p.Name]
@@ -279,22 +287,49 @@ func (c *scopeContract) match(method, path string) (*scopeOperation, string) {
 		if op.Method != method {
 			continue
 		}
-		prefix, suffix, has := strings.Cut(op.Path, "{restaurantID}")
-		if !has {
-			prefix, suffix, has = strings.Cut(op.Path, "{orgID}")
-		}
-		if !has {
-			if path == op.Path {
-				return op, ""
+		if values, ok := scopePathParameters(op.Path, path); ok {
+			id := values["restaurantID"]
+			if id == "" {
+				id = values["orgID"]
 			}
-			continue
-		}
-		if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, suffix) {
-			id := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
-			if !strings.Contains(id, "/") {
-				return op, id
-			}
+			return op, id
 		}
 	}
 	return nil, ""
+}
+
+func scopePathParameters(pattern, path string) (map[string]string, bool) {
+	parts, actual := strings.Split(pattern, "/"), strings.Split(path, "/")
+	if len(parts) != len(actual) {
+		return nil, false
+	}
+	values := map[string]string{}
+	for i, part := range parts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			if actual[i] == "" || actual[i] == "." || actual[i] == ".." || !utf8.ValidString(actual[i]) || strings.ContainsAny(actual[i], "\x00\r\n") {
+				return nil, false
+			}
+			values[strings.TrimSuffix(strings.TrimPrefix(part, "{"), "}")] = actual[i]
+		} else if part != actual[i] {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
+func (op *scopeOperation) pathParameters(target *url.URL) (map[string]string, bool) {
+	if op.id != "productBatches" {
+		return scopePathParameters(op.Path, target.Path)
+	}
+	values, ok := scopePathParameters(op.Path, target.EscapedPath())
+	if !ok {
+		return nil, false
+	}
+	encoded := values["productID"]
+	product, err := url.PathUnescape(encoded)
+	if err != nil || encoded != url.PathEscape(product) || product == "." || product == ".." || !utf8.ValidString(product) || strings.ContainsAny(product, "/\x00\r\n") {
+		return nil, false
+	}
+	values["productID"] = product
+	return values, true
 }

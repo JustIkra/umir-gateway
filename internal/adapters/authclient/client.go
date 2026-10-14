@@ -111,6 +111,10 @@ func (c *Client) Public(ctx context.Context, browser operatorhttp.BrowserContext
 		return nil, unavailable(in.Method, err)
 	}
 	var result json.RawMessage
+	decodeError := decodeFacadeFailure
+	if in.Method == http.MethodGet && (strings.HasSuffix(op.Path, "/members") || strings.HasSuffix(op.Path, "/invitations")) {
+		decodeError = decodeCollectionFailure
+	}
 	err = c.exchange(ctx, in.Method, strings.TrimPrefix(in.Path, "/api/v2"), in.RawQuery, browser, in.Body, op.Status, &result, func(data []byte) error {
 		if err := op.ValidateResponse(in, data); err != nil {
 			return err
@@ -125,7 +129,7 @@ func (c *Client) Public(ctx context.Context, browser operatorhttp.BrowserContext
 			return validateIssued(data)
 		}
 		return nil
-	}, decodeFacadeFailure, false)
+	}, decodeError, false)
 	return result, err
 }
 

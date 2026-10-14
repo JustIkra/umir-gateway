@@ -54,11 +54,14 @@ func NewScoped(opts ScopedOptions) (*ScopedAPI, error) {
 func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	op, id := a.contract.match(r.Method, r.URL.Path)
+	if encoded, tenant := a.contract.match(r.Method, r.URL.EscapedPath()); encoded != nil && encoded.id == "productBatches" {
+		op, id = encoded, tenant
+	}
 	if op == nil {
 		a.writeFailure(w, r, &ScopeError{Status: 404, Code: "NotFound", Message: "unknown scoped route"})
 		return
 	}
-	if r.URL.RawPath != "" && r.URL.EscapedPath() != r.URL.Path {
+	if op.id != "productBatches" && r.URL.RawPath != "" && r.URL.EscapedPath() != r.URL.Path {
 		a.writeFailure(w, r, &ScopeError{Status: 400, Code: "InvalidArgument", Message: "scope path must use canonical identifiers"})
 		return
 	}
@@ -155,7 +158,12 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		token = decision.Token
 	}
-	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privateScopePath(op, id), RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token), Body: body}
+	privatePath := privateScopePath(op, id)
+	pathValues, _ := op.pathParameters(r.URL)
+	if productID := pathValues["productID"]; productID != "" {
+		privatePath = strings.ReplaceAll(privatePath, "{productID}", productID)
+	}
+	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privatePath, RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token), Body: body}
 	if op.id == "appFeedback" {
 		request.Body, err = json.Marshal(struct {
 			Submission json.RawMessage `json:"submission"`
@@ -180,6 +188,12 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.publishChange(r, op, decision, response, err)
 		a.writeFailure(w, r, upstreamUnavailable(r.Method, err))
 		return
+	}
+	if op.id == "productBatches" && response.Status == 200 {
+		if err := validateProductBatchRelations(response.Body, pathValues["productID"], decision.Settings); err != nil {
+			a.writeFailure(w, r, upstreamUnavailable(r.Method, err))
+			return
+		}
 	}
 	a.publishChange(r, op, decision, response, nil)
 	a.observeRuntime(op, response, decision)
