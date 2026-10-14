@@ -183,3 +183,25 @@ func TestLoadRejectsInvalidSecureOrigins(t *testing.T) {
 		})
 	}
 }
+
+func TestG5AuthRuntimeCredentialAndPrivatePort(t *testing.T) {
+	values := map[string]string{"AUTH_URL": "http://127.0.0.1:8085", "AUTH_SERVICE_KEY": "gateway-auth-key", "SERVING_URL": "http://127.0.0.1:8083", "WAREHOUSE_URL": "http://127.0.0.1:8082", "FEEDBACK_URL": "http://127.0.0.1:8084", "SERVING_SERVICE_KEY": "s-key", "WAREHOUSE_SERVICE_KEY": "w-key", "FEEDBACK_SERVICE_KEY": "f-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": "http://127.0.0.1:8080"}
+	for _, key := range []string{"", "gateway-auth-key", "has space"} {
+		values["AUTH_RUNTIME_SERVICE_KEY"] = key
+		if _, err := Load(func(k string) string { return values[k] }); err == nil {
+			t.Fatal("missing/reused/malformed runtime credential accepted")
+		}
+	}
+	values["AUTH_RUNTIME_SERVICE_KEY"] = "auth-runtime-key"
+	cfg, err := Load(func(k string) string { return values[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PrivatePort != "8086" || cfg.PrivateListenHost != "127.0.0.1" {
+		t.Fatal("private listener defaults")
+	}
+	values["PRIVATE_PORT"] = "8080"
+	if _, err := Load(func(k string) string { return values[k] }); err == nil {
+		t.Fatal("public/private port shared")
+	}
+}

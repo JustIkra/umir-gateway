@@ -3,6 +3,7 @@
 package expiration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -27,8 +29,8 @@ const maxBody = 1 << 20
 // Journal is where the runs leave their entries.
 type Journal interface {
 	Append(journal.Entry) int64
-	// LastRequest is the seq of the newest request entry, 0 before the first.
-	LastRequest() int64
+	// LastSignalledRequest is the seq of the newest request entry that signalled a possible change, 0 before the first.
+	LastSignalledRequest() int64
 }
 
 // Upstream learns whether the warehouse answers.
@@ -61,7 +63,7 @@ type Runner struct {
 	// reported is set after a failed run that may have changed state left its entry; later failures in
 	// the same row add none, so an unreachable warehouse does not signal every second.
 	reported bool
-	// version and requests are the warehouse state version and LastRequest after the previous successful
+	// version and requests are the warehouse state version and LastSignalledRequest after the previous successful
 	// run; known is false before it.
 	version  int64
 	requests int64
@@ -93,8 +95,50 @@ func (r *Runner) Run(ctx context.Context) {
 
 // runResult is the part of the warehouse answer the gateway reads.
 type runResult struct {
-	StateVersion string            `json:"stateVersion"`
-	Expired      []json.RawMessage `json:"expired"`
+	EvaluatedAt  string          `json:"evaluatedAt"`
+	StateVersion string          `json:"stateVersion"`
+	Expired      []expiredResult `json:"expired"`
+}
+
+type expiredResult struct {
+	BatchID            string `json:"batchID"`
+	ProductID          string `json:"productID"`
+	WrittenOffQuantity string `json:"writtenOffQuantity"`
+	Reason             string `json:"reason"`
+	ExpiresAt          string `json:"expiresAt"`
+	ProcessedAt        string `json:"processedAt"`
+}
+
+var decimal = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
+var moscowInstant = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?\+03:00$`)
+
+func validVersion(s string) bool {
+	if !decimal.MatchString(s) {
+		return false
+	}
+	_, err := strconv.ParseInt(s, 10, 64)
+	return err == nil
+}
+
+func validInstant(s string) bool {
+	if !moscowInstant.MatchString(s) {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil
+}
+
+func (r runResult) valid() bool {
+	if !validInstant(r.EvaluatedAt) || !validVersion(r.StateVersion) || r.Expired == nil {
+		return false
+	}
+	for _, e := range r.Expired {
+		if e.BatchID == "" || e.ProductID == "" || !validVersion(e.WrittenOffQuantity) || e.WrittenOffQuantity == "0" ||
+			e.Reason != "EXPIRATION" || !validInstant(e.ExpiresAt) || !validInstant(e.ProcessedAt) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Runner) runOnce(parent context.Context) {
@@ -134,9 +178,24 @@ func read(response *http.Response) (runResult, error) {
 		_, err := io.Copy(io.Discard, body)
 		return runResult{}, err
 	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxBody+1))
+	if err != nil {
+		return runResult{}, fmt.Errorf("read run: %w", err)
+	}
+	if len(data) > maxBody {
+		return runResult{}, errors.New("expiration response exceeds limit")
+	}
 	var result runResult
-	if err := json.NewDecoder(body).Decode(&result); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
 		return runResult{}, fmt.Errorf("decode run: %w", err)
+	}
+	if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return runResult{}, errors.New("trailing expiration response data")
+	}
+	if !result.valid() {
+		return runResult{}, errors.New("invalid expiration response envelope")
 	}
 	return result, nil
 }
@@ -147,15 +206,14 @@ func (r *Runner) succeeded(result runResult) {
 		r.failed(http.StatusOK, true, fmt.Errorf("stateVersion %q", result.StateVersion))
 		return
 	}
-	requests := r.opts.Journal.LastRequest()
+	requests := r.opts.Journal.LastSignalledRequest()
 	switch {
 	case len(result.Expired) > 0:
 		r.opts.Journal.Append(journal.Entry{
 			Source: journal.SourceExpiration, Status: http.StatusOK, Outcome: journal.OutcomeSuccess, Count: len(result.Expired),
 		})
 	case r.known && version != r.version && requests == r.requests:
-		// The state moved, yet no request passed the gateway since the previous run: a fresh warehouse
-		// operation wrote off an expired batch inside a read, or the warehouse restarted.
+		// Rejected requests cannot account for a change: they send no invalidation.
 		r.opts.Journal.Append(journal.Entry{Source: journal.SourceExternal, Outcome: journal.OutcomeUnknown})
 	}
 	if r.failures >= failuresBeforeUnavailable {

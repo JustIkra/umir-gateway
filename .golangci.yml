@@ -29,14 +29,52 @@ linters:
       rules:
         production-boundaries:
           list-mode: lax
-          files: ["$all", "!$test"]
+          files: ["$all", "!$test", "!**/tests/fixtures/server/*.go", "!**/tests/fixtures/control/*.go", "!**/tests/fixtures/protocol/*.go", "!**/tests/fixtures/catalog/*.go", "!**/tests/fixtures/catalog/build/*.go"]
           deny:
+            - pkg: "github.com/dlclark/regexp2$"
+              desc: "Only fixture protocol schema compilation may use regexp2."
             - pkg: "github.com/JustIkra/umir-gateway/tests/"
               desc: "Production must not import test support."
             - pkg: "github.com/JustIkra/umir-warehouse"
               desc: "Service modules interact through their declared boundary."
             - pkg: "github.com/JustIkra/umir-serving"
               desc: "Service modules interact through their declared boundary."
+        fixture-boundaries:
+          list-mode: strict
+          files: ["**/tests/fixtures/server/*.go", "**/tests/fixtures/control/*.go"]
+          allow:
+            - "$gostd"
+            - "github.com/JustIkra/umir-gateway/internal/"
+            - "github.com/JustIkra/umir-gateway/tests/fixtures/protocol$"
+            - "github.com/JustIkra/umir-gateway/tests/fixtures/catalog$"
+            - "github.com/santhosh-tekuri/jsonschema/v6$"
+          deny:
+            - pkg: "github.com/JustIkra/umir-warehouse"
+              desc: "Service modules interact through their declared boundary."
+            - pkg: "github.com/JustIkra/umir-serving"
+              desc: "Service modules interact through their declared boundary."
+        fixture-protocol-boundaries:
+          list-mode: strict
+          files: ["**/tests/fixtures/protocol/*.go"]
+          allow:
+            - "$gostd"
+            - "github.com/dlclark/regexp2$"
+            - "github.com/JustIkra/umir-gateway/internal/"
+            - "github.com/JustIkra/umir-gateway/tests/fixtures/protocol$"
+            - "github.com/JustIkra/umir-gateway/tests/fixtures/catalog$"
+            - "github.com/santhosh-tekuri/jsonschema/v6$"
+          deny:
+            - pkg: "github.com/JustIkra/umir-warehouse"
+              desc: "Service modules interact through their declared boundary."
+            - pkg: "github.com/JustIkra/umir-serving"
+              desc: "Service modules interact through their declared boundary."
+        fixture-catalog-boundaries:
+          list-mode: strict
+          files: ["**/tests/fixtures/catalog/*.go", "**/tests/fixtures/catalog/build/*.go"]
+          allow:
+            - "$gostd"
+            - "github.com/JustIkra/umir-gateway/internal/strictjson$"
+            - "github.com/JustIkra/umir-gateway/tests/fixtures/catalog$"
   exclusions:
     presets: []
 formatters:

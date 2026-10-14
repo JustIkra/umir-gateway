@@ -91,7 +91,12 @@ func assemble(t *testing.T, values map[string]string) components {
 
 func loadConfig(t *testing.T, values map[string]string) config.Config {
 	t.Helper()
-	cfg, err := config.Load(func(key string) string { return values[key] })
+	cfg, err := config.Load(func(key string) string {
+		if key == "AUTH_RUNTIME_SERVICE_KEY" && values[key] == "" && values["AUTH_URL"] != "" {
+			return "synthetic-auth-runtime-key"
+		}
+		return values[key]
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

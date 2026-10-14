@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -70,8 +71,9 @@ type Journal struct {
 	ring []Entry
 	last int64
 	// lastRequest is the seq of the newest request entry, 0 before the first.
-	lastRequest int64
-	subscribers map[chan struct{}]struct{}
+	lastRequest          int64
+	lastSignalledRequest int64
+	subscribers          map[chan struct{}]struct{}
 }
 
 // New starts an empty journal of capacity entries in a new epoch named by newID.
@@ -93,9 +95,17 @@ func (j *Journal) Append(e Entry) int64 {
 	defer j.mu.Unlock()
 	j.last++
 	e.Seq, e.At = j.last, j.now()
+	end := min(len(e.Path), 1024)
+	for end > 0 && !utf8.ValidString(e.Path[:end]) {
+		end--
+	}
+	e.Path = strings.Clone(e.Path[:end])
 	j.ring[(e.Seq-1)%int64(len(j.ring))] = e
 	if e.Source == SourceRequest {
 		j.lastRequest = e.Seq
+		if e.Outcome != OutcomeRejected {
+			j.lastSignalledRequest = e.Seq
+		}
 	}
 	if e.Outcome != OutcomeRejected {
 		for ch := range j.subscribers {
@@ -115,12 +125,17 @@ func (j *Journal) Last() (epoch string, seq int64) {
 	return j.epoch, j.last
 }
 
-// LastRequest returns the seq of the newest request entry, 0 before the first. The expiration
-// scheduler compares it between runs to tell a change it did not see pass through the gateway.
+// LastRequest returns the seq of the newest request entry, 0 before the first.
 func (j *Journal) LastRequest() int64 {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.lastRequest
+}
+
+func (j *Journal) LastSignalledRequest() int64 {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.lastSignalledRequest
 }
 
 // Subscribe returns a channel that holds one signal after any number of entries that may have

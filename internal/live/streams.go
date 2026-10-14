@@ -101,6 +101,8 @@ func (s *Streams) Serve(w http.ResponseWriter, r *http.Request, id string, _ ope
 		return
 	}
 
+	sessionChanges.observe(session.PublicationRevision)
+
 	header := w.Header()
 	header.Set("Content-Type", "text/event-stream; charset=utf-8")
 	header.Set("Cache-Control", "no-store")
@@ -159,6 +161,7 @@ func (s *Streams) Serve(w http.ResponseWriter, r *http.Request, id string, _ ope
 			// reports it.
 			wait := time.Second
 			if err == nil {
+				sessionChanges.observe(current.PublicationRevision)
 				next = sessionFrame(current.IdleExpiresAt, current.AbsoluteExpiresAt)
 				wait = max(until(clock, earlier(current.IdleExpiresAt, current.AbsoluteExpiresAt)), time.Second)
 			}
@@ -249,6 +252,7 @@ func ended(reason operator.EndReason) frame {
 // frame is one event with data encoded as JSON on write, or raw text such as a comment.
 type frame struct {
 	name string
+	id   string
 	data any
 	raw  string
 }
@@ -265,7 +269,11 @@ func (f frame) encode() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "event: " + f.name + "\ndata: " + string(data) + "\n\n", nil
+	prefix := ""
+	if f.id != "" {
+		prefix = "id: " + f.id + "\n"
+	}
+	return prefix + "event: " + f.name + "\ndata: " + string(data) + "\n\n", nil
 }
 
 func earlier(a, b time.Time) time.Time {

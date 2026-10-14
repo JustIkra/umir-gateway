@@ -16,11 +16,11 @@ type recordingObserver struct {
 	onCall func()
 }
 
-func (o *recordingObserver) SessionExtended(key string, idle, absolute time.Time) {
+func (o *recordingObserver) SessionExtended(key string, _ uint64, idle, absolute time.Time) {
 	o.add(fmt.Sprintf("extended %s idle %s absolute %s", key, idle.Format(time.TimeOnly), absolute.Format(time.TimeOnly)))
 }
 
-func (o *recordingObserver) SessionEnded(key string, reason EndReason) {
+func (o *recordingObserver) SessionEnded(key string, _ uint64, reason EndReason) {
 	o.add(fmt.Sprintf("ended %s %s", key, reason))
 }
 

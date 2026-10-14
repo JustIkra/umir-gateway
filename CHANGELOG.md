@@ -2,6 +2,91 @@
 
 ## [Unreleased]
 
+- Use the resolved platform temporary directory in private-file and Unix-socket
+  fixture tests. Keep ownership, exact permissions and symlink rejection checks;
+  the macOS-only path previously failed on Linux CI.
+
+- Connect all 29 frozen Auth facade operations in the executable Gateway, including
+  access, organizations, settings, memberships, invitations, email challenges,
+  logout-all and command recovery. Validate the complete wire projection, canonical
+  scope and nested response identities. Keep session/preauth tokens in protected
+  cookies, preserve uncertain commands without replay and retain scoped business
+  routing. Add a reproducible contract projection and real-service HTTP runner.
+
+- Compute private runtime readiness from a validated Auth registry projection and local registrations without an Auth callback. Expire the projection after five seconds or a later failed read, preserve response ordering and copy isolation, and remove the circular status/acknowledgment dependency. Keep signed, epoch-bound registration and fresh business authorization checks.
+
+- Refresh the exact reviewed observation schema. Use the fixture-only ECMAScript compiler hook with regexp2 v1.11.0, bounded per-call matching, asserted formats and enclosing validation failure on regex errors. Preserve Gateway unsupported Feedback behavior. Register regexp2 only for fixture-protocol in lint and architecture policy. Verify protocol acceptance and production/server/control rejection through the effective quality gates.
+
+- Reject nonregular private fixture inputs without blocking on FIFOs. Check descriptor ownership, mode and size before bounded reads in both server and control consumers.
+
+- Add test-owned Gateway operational fixture server/control binaries and Docker image for protocol 1.1.0. Bind controlled owner time, authenticated Unix-only controls, exact request replay, checkpoints and real runtime readiness.
+- Add optional nonblocking scheduler iteration completion sequences after full Run ticks. The fixture matches one outstanding tick ID after the startup baseline; missing observations fail closed. Completion does not imply expiry success.
+- Register only fixture server/control/protocol architecture components and narrow fixture import rules. Preserve production edges and peer-module denies; extend quality enforcement scenarios.
+
+- Accept an injected Auth-client clock for control-token expiry, signing-key
+  refresh, and scheduler-token validation. Preserve the system-clock default.
+  The test wrapper supplies its controlled clock; ordinary composition retains
+  the system-clock default. Real-service acceptance remains a separate gate.
+
+- Publish a restaurant-scoped invalidation after unknown scheduler runs recover,
+  including recovery polls with no new transitions. Retain the unknown state if
+  publication fails, so the next successful poll can notify clients.
+
+- Add an Auth-issued, restaurant/epoch-bound due-expiry scheduler with bounded
+  attempts, no final-writeoff authority, and tenant-specific unknown invalidation.
+- Add a separate private Gateway runtime listener, Auth signature verification,
+  fresh registration checks, idempotent closure, and retained local tombstones.
+- Require a separate `AUTH_RUNTIME_SERVICE_KEY` for the Auth-to-Gateway runtime
+  caller. Preserve the public browser boundary and legacy topology.
+
+- Preserve committed Warehouse invalidation metadata on response consumption
+  failures and publish it before direct-read and summary errors.
+- Include initial SSE writes, replay, and flush latency in the Auth cutoff budget.
+  Bound stalled sends to the remaining budget and terminal sends to one second.
+
+- Add restaurant-scoped SSE with current Auth checks before each event and bounded
+  idle revalidation. Close only the affected scope on revoke/delete; unknown Auth
+  outcomes close explicitly without extending sessions.
+- Add bounded restaurant journals and encrypted session-bound reconnect cursors.
+  Runtime reset/restart requires refresh; cross-scope or altered cursors replay
+  no bytes. Preserve invalidation after committed read preparation fails.
+- Bound scoped streams and cancel their subscriptions, timers and Auth checks
+  at shutdown. Real-service acceptance remains J1/E work; no publication or
+  selected image changes.
+
+- Repair legacy realtime invalidation after rejected writes, order session callbacks
+  by commit revision, reject incomplete expiration replies, and copy journal paths
+  with a 1024-byte UTF-8 boundary. Preserve unknown outcomes and exact instants.
+
+- Validate saved Serving epochs on resolution replies and authorized scope IDs in
+  business errors. Preserve Auth retry metadata through scoped CSRF and authorization
+  failures. Keep authoritative runtime-reset outcomes indeterminate.
+
+- Add backend v2 restaurant routes with fresh Auth authorization, fixed service
+  audiences, private peer credentials, CSRF checks, and frozen wire validation.
+- Add trusted scoped Feedback intake/read/export and explicitly unscoped anonymous
+  intake. Browser identity overrides never assign a Feedback tenant.
+- Add own-org Admin summary composition with complete per-restaurant report pages,
+  exact quantities, retained identities, and explicit partial failures.
+- Require private Serving, Warehouse, and Feedback credentials and origin URLs in
+  Auth topology. Preserve business retry bodies, queries, and original epochs.
+  Malformed or unknown replies do not trigger an automatic retry. Scoped replies
+  reject cross-tenant envelopes, nested retained outcomes, and Feedback records.
+
+- Reject malformed or overlength Auth `User.email` values before accepting login,
+  session reads or profile results. Preserve unknown mutation outcomes and install
+  no success cookie. Add valid-email controls and refusal regressions.
+- Add the backend v2 Auth session/profile transport selected by `AUTH_URL`, with
+  required private credentials, bounded exchanges, strict replies and no mutation
+  retries. This mode opens no local account aggregate and has no Auth signer.
+- Preserve operator alias bodies, response keys, Origin/CSRF checks and cookie
+  policy. Add the corresponding v2 account routes with caller command identities.
+  Unknown outcomes do not install or clear success cookies. Background activity
+  is passed to Auth without local idle extension.
+- Keep the selected legacy topology independent. In Auth mode reject old unscoped
+  business/live routes. Scoped authorization and SSE use the frozen v2 contract;
+  scheduler wiring remains the following Gateway unit. No selected image or release changes.
+
 - Реальное время для `/app`. Журнал изменений в памяти (`JOURNAL_CAPACITY`, по умолчанию 1000) записывает допущенные изменяющие бизнес-запросы, смену имени оператора и запуски проверки сроков: метод, путь, статус и итог по статусу, без тел и данных запроса. Поток SSE `GET /api/live` передаёт сигналы `change`, минутные `tick`, сроки `session`, `session-ended` и доступность склада `upstream`; он не продлевает сессию, ограничен 8 потоками на сессию и 64 на процесс (`429 TooManyStreams`) и закрывается при остановке.
 - Заголовок `X-Umir-Activity: background` у бизнес-запросов и `GET /api/operator/me`: те же проверки без продления сессии и без записи файла учётной записи. Заголовок не уходит в upstream.
 - Проверку сроков запускает gateway (gateway#19): `POST /expiration-runs` склада раз в `EXPIRATION_RUN_INTERVAL` (по умолчанию `1s`), без наложения запусков, с бюджетом `UPSTREAM_TIMEOUT`. Браузер получает `404` на `/api/warehouse/expiration-runs`. Требует склада с этим маршрутом.

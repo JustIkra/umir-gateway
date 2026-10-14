@@ -66,15 +66,20 @@ func newAccounts(cfg config.Operator, observer operator.SessionObserver) (*opera
 // components are the parts of one gateway process: the HTTP handler, the change journal, the live
 // streams and the expiration runs.
 type components struct {
-	handler http.Handler
-	journal *journal.Journal
-	streams *live.Streams
-	expiry  *expiration.Runner
+	handler        http.Handler
+	privateHandler http.Handler
+	journal        *journal.Journal
+	scopedStreams  *live.Handler
+	streams        *live.Streams
+	expiry         interface{ Run(context.Context) }
 }
 
 // newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
 // starts expiry itself.
 func newComponents(cfg config.Config, logger *log.Logger) (components, error) {
+	if cfg.AuthURL != nil {
+		return newAuthComponents(cfg, logger)
+	}
 	events := live.NewSessionEvents()
 	accounts, err := newAccounts(cfg.Operator, events)
 	if err != nil {
@@ -210,7 +215,12 @@ func newServer(cfg config.Config, app components) *http.Server {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	server.RegisterOnShutdown(app.streams.Close)
+	if app.streams != nil {
+		server.RegisterOnShutdown(app.streams.Close)
+	}
+	if app.scopedStreams != nil {
+		server.RegisterOnShutdown(app.scopedStreams.Close)
+	}
 	return server
 }
 
@@ -266,6 +276,9 @@ func main() {
 		log.Fatal(err)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "clear-sessions" {
+		if cfg.AuthURL != nil {
+			log.Fatal("clear-sessions is a legacy-only command; use Auth logout-all after cutover")
+		}
 		if err := clearSessions(cfg.Operator, os.Stdout); err != nil {
 			log.Fatal(err)
 		}
@@ -293,12 +306,39 @@ func main() {
 	runs := make(chan struct{})
 	go func() {
 		defer close(runs)
-		app.expiry.Run(signals)
+		if app.expiry != nil {
+			app.expiry.Run(signals)
+		}
 	}()
-	err = run(signals, server, listener, shutdownGrace)
+	if app.privateHandler != nil {
+		privateServer := &http.Server{Addr: net.JoinHostPort(cfg.PrivateListenHost, cfg.PrivatePort), Handler: app.privateHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+		privateListener, listenErr := net.Listen("tcp", privateServer.Addr)
+		if listenErr != nil {
+			stop()
+			<-runs
+			if closeErr := listener.Close(); closeErr != nil {
+				log.Printf("public listener close failed")
+			}
+			log.Fatal("private listener unavailable")
+		}
+		err = runPair(signals, server, listener, privateServer, privateListener)
+	} else {
+		err = run(signals, server, listener, shutdownGrace)
+	}
 	stop()
 	<-runs
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runPair(parent context.Context, public *http.Server, publicListener net.Listener, private *http.Server, privateListener net.Listener) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- run(ctx, public, publicListener, shutdownGrace) }()
+	go func() { results <- run(ctx, private, privateListener, shutdownGrace) }()
+	first := <-results
+	cancel()
+	return errors.Join(first, <-results)
 }

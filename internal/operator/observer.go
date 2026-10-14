@@ -20,9 +20,9 @@ const (
 // the session's token. Expiry is not reported: nothing commits it, and a watcher knows the deadline.
 type SessionObserver interface {
 	// SessionExtended reports the deadlines of an ordinary session that a user request extended.
-	SessionExtended(key string, idleExpiresAt, absoluteExpiresAt time.Time)
+	SessionExtended(key string, revision uint64, idleExpiresAt, absoluteExpiresAt time.Time)
 	// SessionEnded reports a session that can no longer be used.
-	SessionEnded(key string, reason EndReason)
+	SessionEnded(key string, revision uint64, reason EndReason)
 }
 
 // SessionKey names the session of token in observer calls without the token itself.
@@ -30,6 +30,7 @@ func SessionKey(token string) string { return sessionDigest(token) }
 
 // sessionEvent is a committed change waiting for the observer; ended is empty for an extension.
 type sessionEvent struct {
+	revision       uint64
 	key            string
 	ended          EndReason
 	idle, absolute time.Time
@@ -41,12 +42,14 @@ func (s *Service) extendedLocked(id string, st *session) {
 		return
 	}
 	view := s.view(id, st)
-	s.events = append(s.events, sessionEvent{key: sessionDigest(id), idle: view.IdleExpiresAt, absolute: view.AbsoluteExpiresAt})
+	s.eventRevision++
+	s.events = append(s.events, sessionEvent{revision: s.eventRevision, key: sessionDigest(id), idle: view.IdleExpiresAt, absolute: view.AbsoluteExpiresAt})
 }
 
 // endedLocked queues the end of the session with digest after a commit.
 func (s *Service) endedLocked(digest string, reason EndReason) {
-	s.events = append(s.events, sessionEvent{key: digest, ended: reason})
+	s.eventRevision++
+	s.events = append(s.events, sessionEvent{revision: s.eventRevision, key: digest, ended: reason})
 }
 
 // unlock releases s.mu and then reports the changes committed under it, so the observer never runs
@@ -60,9 +63,9 @@ func (s *Service) unlock() {
 	}
 	for _, e := range events {
 		if e.ended != "" {
-			s.opts.Observer.SessionEnded(e.key, e.ended)
+			s.opts.Observer.SessionEnded(e.key, e.revision, e.ended)
 			continue
 		}
-		s.opts.Observer.SessionExtended(e.key, e.idle, e.absolute)
+		s.opts.Observer.SessionExtended(e.key, e.revision, e.idle, e.absolute)
 	}
 }

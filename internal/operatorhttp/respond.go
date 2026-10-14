@@ -66,6 +66,21 @@ func (a *API) problem(w http.ResponseWriter, r *http.Request, status int, code, 
 // quoted, so a decoded newline in it cannot forge another log line.
 func (a *API) reject(w http.ResponseWriter, r *http.Request, status int, p httpapi.Problem) {
 	a.logger.Printf("operator %s %s %q: %d %s", httpapi.RequestID(r), r.Method, r.URL.Path, status, p.Code)
+	if a.v2 {
+		outcome := "not_committed"
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			outcome = "unavailable"
+		}
+		a.writeJSON(w, r, status, struct {
+			Code           string            `json:"code"`
+			Outcome        string            `json:"outcome"`
+			Message        string            `json:"message"`
+			Retryable      bool              `json:"retryable"`
+			FieldErrors    map[string]string `json:"fieldErrors,omitempty"`
+			SessionRevoked *bool             `json:"sessionRevoked,omitempty"`
+		}{Code: p.Code, Outcome: outcome, Message: p.Message, FieldErrors: p.FieldErrors, SessionRevoked: p.SessionRevoked})
+		return
+	}
 	httpapi.WriteProblem(w, r, status, p)
 }
 
