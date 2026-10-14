@@ -241,9 +241,13 @@ func TestChangeBurstsArriveAsOneEventWithTheLatestSeq(t *testing.T) {
 	s := greeted(t, address, "a")
 	f.changes.mu.Lock()
 	f.changes.seq = 41
+	f.changes.seq++
+	f.changes.seq++
+	select {
+	case f.changes.signal <- struct{}{}:
+	default:
+	}
 	f.changes.mu.Unlock()
-	f.changes.append()
-	f.changes.append()
 	if got := s.next(); got != `change {"epoch":"epoch-1","seq":"43"}` {
 		t.Fatalf("got %s", got)
 	}

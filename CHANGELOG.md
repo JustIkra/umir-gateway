@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Publish the complete queued change burst before waking the SSE test reader.
+  Preserve the seq43 assertion and production stream/journal behavior; the
+  previous test depended on goroutine scheduling between two notifications.
+
 - Add the UA1 batch, member and invitation reads and resend-link facade.
   Validate nested owner identities, strict queries and invitation receipt targets;
   preserve collection errors and uncertain commands without retry.
