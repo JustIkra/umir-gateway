@@ -128,6 +128,22 @@ async function ready(label, org, operation) {
 async function waitUntil(instant) {
   while (Date.now() <= Date.parse(instant)) await delay(Math.min(1000, Date.parse(instant) - Date.now() + 50));
 }
+async function challengeCode(email, challengeID) {
+  for(let n=0;n<60;n++) {
+    const list=JSON.parse((await exchange(new URL('/api/v1/messages',args.mailpit))).text);
+    for(const item of list.messages) {
+      if(!item.To?.some(to=>to.Address===email)||!item.MessageID?.includes('registration.'+challengeID+'.'))continue;
+      const mail=JSON.parse((await exchange(new URL('/api/v1/message/'+item.ID,args.mailpit))).text);
+      const match=mail.Text?.match(/\b([0-9]{3})\s+([0-9]{3})\b/);
+      if(match)return match[1]+match[2];
+    }
+    await delay(500);
+  }
+  throw Error('Synthetic OTP missing; retain command');
+}
+function retainedInput(label,input={}) {
+  return state.attempts[label]?.body ? JSON.parse(state.attempts[label].body) : command(label,input);
+}
 const observed = {};
 function evidence(id, checks) {
   observed[id] = {status:'partial', checks, observationCount: state.rows.length};
@@ -146,6 +162,102 @@ async function linkMessage(email, invitationID, jobID) {
   throw Error('Synthetic invitation mail was not received');
 }
 try {
+  if(['roles','cursor-capacity','contact-snapshot'].includes(args.phase)) {
+    state.oneShotStarts ??= {};
+    assert(!state.oneShotStarts[args.phase], 'One-shot phase already started; retain its commands/evidence and use a separate qualification state');
+    state.oneShotStarts[args.phase]=true;save();
+  }
+  if(args.phase==='contact-snapshot') {
+    const admin=await login('admin',credentials.login,credentials.password);
+    const member=await login('member',state.roleEmail,state.password);
+    const org=state.completed['ua1-org'].orgID;
+    const route='/api/v2/orgs/'+org+'/members?limit=1';
+    const first=await call('ua1-contact-first-'+id('contact-run'),'admin','GET',route);
+    const next=route+'&cursor='+encodeURIComponent(first.nextCursor);
+    const before=await call('ua1-contact-before-'+id('contact-run'),'admin','GET',next);
+    assert.equal(before.items.length,1);
+    const target=before.items[0].membership.userID;
+    assert(target===member.user.userID || target===admin.user.userID);
+    const selected=target===member.user.userID?'member':'admin';
+    const newName='UA1 contact '+randomUUID().slice(0,8);
+    assert.notEqual(before.items[0].displayName,newName);
+    const changed=await call('ua1-contact-rename-'+id(newName),selected,'PATCH','/api/v2/me/display-name',command('ua1-contact-rename-'+id(newName),{displayName:newName}));
+    assert.equal(changed.userID,target);
+    assert.equal(changed.displayName,newName);
+    const after=await call('ua1-contact-after-'+id('contact-run'),'admin','GET',next);
+    assert.deepEqual(after,before);
+    const fresh=await call('ua1-contact-fresh-'+id('contact-run'),'admin','GET','/api/v2/orgs/'+org+'/members');
+    assert.equal(fresh.items.find(item=>item.membership.userID===target).displayName,newName);
+    evidence('UA1-R06',['exact changed user bound to continuation row','captured row/context unchanged','fresh list shows new name']);
+    writeFileSync(path.join(directory,'ua1-contact-report.json'),JSON.stringify({profile:'UA1',result:'observations_completed',observed},null,2)+'\n',{mode:0o600});
+  } else if(args.phase==='roles') {
+    await login('admin',credentials.login,credentials.password);
+    const accepted=state.completed['ua1-org'];assert(accepted);
+    const org=accepted.orgID, restaurant=accepted.restaurantIDs[0];
+    state.roleEmail ??= 'role-'+id('role-email')+'@example.invalid';save();
+    const invitation=await call('ua1-role-invite','admin','POST','/api/v2/orgs/'+org+'/invitations',retainedInput('ua1-role-invite',{email:state.roleEmail,assignments:[{restaurantID:restaurant,roles:['Warehouse','Waiter']}]}),201);
+    if(!state.completed['ua1-role-complete']) {
+      await call('ua1-role-csrf','member','GET','/api/v2/csrf');
+      const challenge=await call('ua1-role-begin','member','POST','/api/v2/invitations/'+invitation.invitationID+'/challenges',retainedInput('ua1-role-begin',{invitationID:invitation.invitationID}));
+      await call('ua1-role-no-proof','member','POST','/api/v2/challenges/'+challenge.challengeID+'/complete',retainedInput('ua1-role-no-proof',{challengeID:challenge.challengeID,proof:'unverified-proof',password:state.password,displayName:'UA1 member'}),404,'NotFound');
+      const code=await challengeCode(state.roleEmail,challenge.challengeID);
+      const verified=await call('ua1-role-verify','member','POST','/api/v2/challenges/'+challenge.challengeID+'/verify',retainedInput('ua1-role-verify',{challengeID:challenge.challengeID,code}));
+      await call('ua1-role-complete','member','POST','/api/v2/challenges/'+challenge.challengeID+'/complete',retainedInput('ua1-role-complete',{challengeID:challenge.challengeID,proof:verified.proof,password:state.password,displayName:'UA1 member'}));
+      evidence('UA1-M08',['invitation ID and unverified proof cannot complete enrollment','real email-bound OTP/proof required']);
+    }
+    await login('member',state.roleEmail,state.password);
+    const access=await call('ua1-role-access','member','GET','/api/v2/access');
+    const membership=access.memberships.find(m=>m.orgID===org);assert(membership);
+    const route='/api/v2/r/'+restaurant+'/warehouse/products/'+encodeURIComponent('UA1 '+id('product')+' # %2F')+'/batches';
+    if(!state.completed['ua1-role-waiter']) {
+      assert(membership.assignments[0].roles.includes('Warehouse')&&membership.assignments[0].roles.includes('Waiter'));
+      await call('ua1-role-batches','member','GET',route);
+    }
+    await call('ua1-role-contact-denied','member','GET','/api/v2/orgs/'+org+'/members',undefined,403,'Forbidden');
+    await call('ua1-role-invitations-denied','member','GET','/api/v2/orgs/'+org+'/invitations',undefined,403,'Forbidden');
+    const contacts=await call('ua1-role-contacts','admin','GET','/api/v2/orgs/'+org+'/members');
+    const person=contacts.items.find(row=>row.membership.userID===state.completed['ua1-role-complete'].user.userID);
+    assert.equal(person.email,state.roleEmail);
+    assert.equal(person.membership.orgID,org);
+    evidence('UA1-R01',['real verified User contact join','legacy null retained','own-org assignments only']);
+    const first=await call('ua1-role-capture','admin','GET','/api/v2/orgs/'+org+'/members?limit=1');
+    const before=await call('ua1-role-capture-before','admin','GET','/api/v2/orgs/'+org+'/members?limit=1&cursor='+encodeURIComponent(first.nextCursor));
+    const name=state.completed['ua1-role-name'] ? 'UA1 member second name' : 'UA1 member renamed';
+    await call('ua1-role-name-'+id(name),'member','PATCH','/api/v2/me/display-name',command('ua1-role-name-'+id(name),{displayName:name}));
+    const after=await call('ua1-role-capture-after','admin','GET','/api/v2/orgs/'+org+'/members?limit=1&cursor='+encodeURIComponent(first.nextCursor));
+    assert.deepEqual(before,after);
+    if(before.items.some(item=>item.membership.userID===person.membership.userID)) evidence('UA1-R06',['changed contact lies on the captured continuation','real profile mutation preserves captured names/order/versions/context']);
+    const waiter=await call('ua1-role-waiter','admin','PUT','/api/v2/orgs/'+org+'/memberships/'+membership.membershipID,retainedInput('ua1-role-waiter',{expectedMembershipVersion:membership.membershipVersion,orgRoles:[],assignments:[{restaurantID:restaurant,roles:['Waiter']}]}));
+    assert(waiter.assignments[0].roles.includes('Waiter')&&!waiter.assignments[0].roles.includes('Warehouse'));
+    await call('ua1-role-stock-denied','member','GET',route,undefined,403,'Forbidden');
+    evidence('UA1-B08',['combined Warehouse/Waiter grant reads stock','fresh Waiter-only grant denies stock after real membership update']);
+    evidence('UA1-R02',['real joined combined roles and exact version','updated role union reflected by current authorization']);
+    evidence('UA1-R05',['employee denied Admin contacts/invitations']);
+    writeFileSync(path.join(directory,'ua1-roles-report.json'),JSON.stringify({profile:'UA1',result:'observations_completed',observed,coverage:'Role/contact/profile subset; cross-org Admin and cached Admin/session revocation remain pending'},null,2)+'\n',{mode:0o600});
+  } else if(args.phase==='cursor-capacity') {
+    await login('admin',credentials.login,credentials.password);
+    const accepted=state.completed['ua1-org'];
+    assert(accepted,'Run the initial phase first');
+    const product='UA1 '+id('product')+' # %2F';
+    const route='/api/v2/r/'+accepted.restaurantIDs[0]+'/warehouse/products/'+encodeURIComponent(product)+'/batches?limit=1';
+    const captures=[];
+    for(let n=0;n<128;n++) {
+      const page=await call('ua1-capacity-'+n,'admin','GET',route,undefined,[200,503]);
+      if(page.code) {
+        assert.equal(page.code,'LimitExceeded');
+        assert(captures.length>0 && captures.length<=128);
+        break;
+      }
+      assert.equal(page.result.items.length,1);
+      assert(page.result.nextCursor);captures.push(page.result.nextCursor);
+    }
+    await call('ua1-capacity-exhausted','admin','GET',route,undefined,503,'LimitExceeded');
+    const first=await call('ua1-capacity-retained','admin','GET',route+'&cursor='+encodeURIComponent(captures[0]));
+    assert.equal(first.result.items.length,1);
+    assert.equal(first.result.nextCursor,undefined);
+    evidence('UA1-P02',['real Warehouse active snapshot ceiling reached without truncation','existing retained capture remains readable','end omits cursor']);
+    writeFileSync(path.join(directory,'ua1-capacity-report.json'),JSON.stringify({profile:'UA1',result:'observations_completed',captures:captures.length,observed,coverage:'Warehouse capacity subset; Auth/bytes/rows and exact expiry remain separate evidence'},null,2)+'\n',{mode:0o600});
+  } else {
   await login('admin',credentials.login,credentials.password);
   const accepted=await call('ua1-org','admin','POST','/api/v2/orgs',command('ua1-org',{name:'UA1 qualification',timeZone:'Europe/Moscow',firstRestaurantName:'UA1 first'}),201);
   await ready('ua1-ready',accepted.orgID,accepted);
@@ -166,8 +278,14 @@ try {
   const product='UA1 '+id('product')+' # %2F';
   await call('ua1-product-register','admin','POST',prefix+'/products',command('ua1-product-register',{productID:product,name:'UA1 milk',baseUnit:'ml'}),200,undefined,headers);
   const batchPath=prefix+'/products/'+encodeURIComponent(product)+'/batches';
-  const empty=await call('ua1-batches-empty','admin','GET',batchPath);
-  assert.deepEqual(empty.result.items,[]);
+  if(!state.completed['ua1-delivery']) {
+    const empty=await call('ua1-batches-empty','admin','GET',batchPath);
+    assert.deepEqual(empty.result.items,[]);
+    state.facts ??= {};state.facts.emptyProductObserved=true;save();
+  } else {
+    assert(state.facts?.emptyProductObserved || state.facts?.stock,'Missing retained initial empty-product observation');
+    state.rows.push({label:'ua1-batches-empty',method:'GET',retained:true});save();
+  }
   await call('ua1-batches-missing','admin','GET',prefix+'/products/missing-'+id('missing')+'/batches',undefined,404,'NotFound');
   evidence('UA1-B03',['existing product returns empty200','authorized missing product404']);
   const base=state.completed['ua1-time'] ?? {instant:new Date().toISOString()};
@@ -271,6 +389,7 @@ try {
   await call('ua1-resend-cancelled','admin','POST',resendPath,command('ua1-resend-cancelled'),404,'NotFound');
   writeFileSync(path.join(directory,'ua1-runtime-report.json'),JSON.stringify({profile:'UA1',result:'observations_completed',coverage:'Recorded checks only; row statuses partial; not all34 acceptance rows, browser, original all67 or J1/E/J2',requests:state.rows,observed},null,2)+'\n',{mode:0o600});
   process.stdout.write('UA1 real-service observations completed\n');
+  }
 } catch(error) {
   save();process.stderr.write(error.message+'\n');process.exitCode=1;
 }
