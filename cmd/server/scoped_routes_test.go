@@ -70,7 +70,11 @@ func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
 				writeScopedJSON(t, w, map[string]any{"orgID": scopedOrg, "restaurantID": tenant, "roles": []string{}, "orgRoles": []string{"Admin"}, "permissions": []string{"org.summary.read"}, "settings": settings, "lifecycleVersion": "1"})
 				return
 			}
-			writeScopedJSON(t, w, map[string]any{"userID": "11111111-1111-4111-8111-111111111111", "sessionID": "55555555-5555-4555-8555-555555555555", "sessionVersion": "1", "credentialVersion": "1", "accessVersion": "1", "orgID": scopedOrg, "tenantID": tenant, "permissions": []string{"catalog.read", "catalog.write", "stock.read", "menu.read", "order.confirm", "feedback.submit", "feedback.read", "feedback.export", "analytics.read", "writeoff.confirm"}, "settings": settings, "lifecycleVersion": "1", "token": "auth-issued-token", "expiresAt": time.Now().Add(time.Minute).Format(time.RFC3339Nano), "session": map[string]any{"expiresAt": "2099-10-13T10:00:00+03:00", "idleExpiresAt": "2099-10-13T10:00:00+03:00", "absoluteExpiresAt": "2099-10-13T11:00:00+03:00", "rememberMe": false, "csrfToken": "csrf"}})
+			permissions := []string{"catalog.read", "catalog.write", "stock.read", "menu.read", "order.confirm", "feedback.submit", "feedback.read", "feedback.export", "analytics.read", "writeoff.confirm"}
+			if input["operation"] == "recommendations" {
+				permissions = []string{"recommendations.read", "consumer.recommendations.read"}
+			}
+			writeScopedJSON(t, w, map[string]any{"userID": "11111111-1111-4111-8111-111111111111", "sessionID": "55555555-5555-4555-8555-555555555555", "sessionVersion": "1", "credentialVersion": "1", "accessVersion": "1", "orgID": scopedOrg, "tenantID": tenant, "permissions": permissions, "settings": settings, "lifecycleVersion": "1", "token": "auth-issued-token", "expiresAt": time.Now().Add(time.Minute).Format(time.RFC3339Nano), "session": map[string]any{"expiresAt": "2099-10-13T10:00:00+03:00", "idleExpiresAt": "2099-10-13T10:00:00+03:00", "absoluteExpiresAt": "2099-10-13T11:00:00+03:00", "rememberMe": false, "csrfToken": "csrf"}})
 		default:
 			t.Errorf("unexpected Auth path %s", r.URL.Path)
 			w.WriteHeader(404)

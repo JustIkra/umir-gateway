@@ -1,0 +1,308 @@
+{
+  "profile": "FIN1",
+  "description": "Hand-calculated normative examples, not runtime evidence. They share one coherent synthetic capture.",
+  "examples": [
+    {
+      "name": "supply-observed-and-deficit",
+      "schema": "ScopedSupplySuggestions",
+      "value": {
+        "context": {
+          "orgID": "22222222-2222-4222-8222-222222222222",
+          "tenantID": "33333333-3333-4333-8333-333333333333",
+          "runtimeEpoch": "44444444-4444-4444-8444-444444444444",
+          "settings": {
+            "timeZone": "Europe/Moscow",
+            "settingsVersion": "1"
+          },
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42"
+        },
+        "result": {
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42",
+          "policy": {
+            "version": "FIN1",
+            "historyDays": 7,
+            "coverageThresholdDays": 3,
+            "targetDays": 7
+          },
+          "window": {
+            "from": "2026-10-08T12:00:00+03:00",
+            "to": "2026-10-15T12:00:00+03:00",
+            "days": 7
+          },
+          "coverage": {
+            "epoch": "44444444-4444-4444-8444-444444444444",
+            "coverageFrom": "2026-10-15T09:00:00+03:00",
+            "complete": false,
+            "requestedFrom": "2026-10-08T12:00:00+03:00",
+            "availableFrom": "2026-10-15T09:00:00+03:00"
+          },
+          "items": [
+            {
+              "productID": "flour",
+              "productName": "Flour",
+              "baseUnit": "g",
+              "availableQuantity": "2000",
+              "consumedQuantity": "7000",
+              "averageDailyBaseUnits": "1.000000",
+              "coverageDays": "2.000000",
+              "onePortionDeficit": "0",
+              "suggestedQuantity": "5000",
+              "blockedDishIDs": [],
+              "reasons": [
+                "low_coverage"
+              ]
+            },
+            {
+              "productID": "milk",
+              "productName": "Milk",
+              "baseUnit": "ml",
+              "availableQuantity": "0",
+              "consumedQuantity": "0",
+              "averageDailyBaseUnits": "0.000000",
+              "coverageDays": null,
+              "onePortionDeficit": "50000",
+              "suggestedQuantity": "50000",
+              "blockedDishIDs": [
+                "milk-dish"
+              ],
+              "reasons": [
+                "stop_list_deficit"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "coherent-recommendation-facts",
+      "schema": "ScopedRecommendationInputs",
+      "value": {
+        "context": {
+          "orgID": "22222222-2222-4222-8222-222222222222",
+          "tenantID": "33333333-3333-4333-8333-333333333333",
+          "runtimeEpoch": "44444444-4444-4444-8444-444444444444",
+          "settings": {
+            "timeZone": "Europe/Moscow",
+            "settingsVersion": "1"
+          },
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42"
+        },
+        "result": {
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42",
+          "horizonHours": 72,
+          "window": {
+            "from": "2026-10-08T12:00:00+03:00",
+            "to": "2026-10-15T12:00:00+03:00",
+            "days": 7
+          },
+          "coverage": {
+            "epoch": "44444444-4444-4444-8444-444444444444",
+            "coverageFrom": "2026-10-15T09:00:00+03:00",
+            "complete": false,
+            "requestedFrom": "2026-10-08T12:00:00+03:00",
+            "availableFrom": "2026-10-15T09:00:00+03:00"
+          },
+          "menu": {
+            "evaluatedAt": "2026-10-15T12:00:00+03:00",
+            "stateVersion": "42",
+            "dishes": [
+              {
+                "dishID": "fish-dish",
+                "dishName": "Fish dish",
+                "isAvailable": true,
+                "deficits": [],
+                "allocations": [
+                  {
+                    "productID": "fish",
+                    "productName": "Fish",
+                    "batchID": "fish-risk",
+                    "quantity": "300000",
+                    "baseUnit": "g",
+                    "expiresAt": "2026-10-15T18:00:00+03:00"
+                  }
+                ]
+              },
+              {
+                "dishID": "parsley-dish",
+                "dishName": "Parsley dish",
+                "isAvailable": true,
+                "deficits": [],
+                "allocations": [
+                  {
+                    "productID": "parsley",
+                    "productName": "Parsley",
+                    "batchID": "parsley-risk",
+                    "quantity": "1000",
+                    "baseUnit": "g",
+                    "expiresAt": "2026-10-15T18:00:00+03:00"
+                  },
+                  {
+                    "productID": "parsley",
+                    "productName": "Parsley",
+                    "batchID": "parsley-fresh",
+                    "quantity": "4000",
+                    "baseUnit": "g",
+                    "expiresAt": "2026-11-15T12:00:00+03:00"
+                  }
+                ]
+              },
+              {
+                "dishID": "rice-dish",
+                "dishName": "Rice dish",
+                "isAvailable": true,
+                "deficits": [],
+                "allocations": [
+                  {
+                    "productID": "rice",
+                    "productName": "Rice",
+                    "batchID": "rice-fresh",
+                    "quantity": "1000",
+                    "baseUnit": "g",
+                    "expiresAt": "2027-04-15T12:00:00+03:00"
+                  }
+                ]
+              },
+              {
+                "dishID": "flour-dish",
+                "dishName": "Flour dish",
+                "isAvailable": true,
+                "deficits": [],
+                "allocations": [
+                  {
+                    "productID": "flour",
+                    "productName": "Flour",
+                    "batchID": "flour-fresh",
+                    "quantity": "1000",
+                    "baseUnit": "g",
+                    "expiresAt": "2026-11-15T12:00:00+03:00"
+                  }
+                ]
+              },
+              {
+                "dishID": "milk-dish",
+                "dishName": "Milk dish",
+                "isAvailable": false,
+                "deficits": [
+                  {
+                    "productID": "milk",
+                    "requiredQuantity": "50000",
+                    "availableQuantity": "0"
+                  }
+                ],
+                "allocations": []
+              }
+            ]
+          },
+          "riskBatches": [
+            {
+              "productID": "fish",
+              "productName": "Fish",
+              "batchID": "fish-risk",
+              "remainingQuantity": "3000000",
+              "baseUnit": "g",
+              "expiresAt": "2026-10-15T18:00:00+03:00",
+              "remainingSeconds": "21600"
+            },
+            {
+              "productID": "parsley",
+              "productName": "Parsley",
+              "batchID": "parsley-risk",
+              "remainingQuantity": "1000",
+              "baseUnit": "g",
+              "expiresAt": "2026-10-15T18:00:00+03:00",
+              "remainingSeconds": "21600"
+            }
+          ],
+          "demand": [
+            {
+              "dishID": "flour-dish",
+              "portions": "7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "normalized-fish-above-tiny-parsley",
+      "schema": "ServingScopedRecommendations",
+      "value": {
+        "context": {
+          "orgID": "22222222-2222-4222-8222-222222222222",
+          "tenantID": "33333333-3333-4333-8333-333333333333",
+          "runtimeEpoch": "55555555-5555-4555-8555-555555555555",
+          "settings": {
+            "timeZone": "Europe/Moscow",
+            "settingsVersion": "1"
+          },
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42",
+          "warehouseEpoch": "44444444-4444-4444-8444-444444444444"
+        },
+        "result": {
+          "evaluatedAt": "2026-10-15T12:00:00+03:00",
+          "stateVersion": "42",
+          "policyVersion": "FIN1",
+          "horizonHours": 72,
+          "window": {
+            "from": "2026-10-08T12:00:00+03:00",
+            "to": "2026-10-15T12:00:00+03:00",
+            "days": 7
+          },
+          "coverage": {
+            "epoch": "44444444-4444-4444-8444-444444444444",
+            "coverageFrom": "2026-10-15T09:00:00+03:00",
+            "complete": false,
+            "requestedFrom": "2026-10-08T12:00:00+03:00",
+            "availableFrom": "2026-10-15T09:00:00+03:00"
+          },
+          "items": [
+            {
+              "dishID": "fish-dish",
+              "dishName": "Fish dish",
+              "score": "0.666667",
+              "demandBasis": "fallback",
+              "priorityExpiresAt": "2026-10-15T18:00:00+03:00",
+              "reasons": [
+                {
+                  "productID": "fish",
+                  "productName": "Fish",
+                  "batchID": "fish-risk",
+                  "quantityPerPortion": "300000",
+                  "riskQuantity": "3000000",
+                  "targetPortions": "10",
+                  "baseUnit": "g",
+                  "expiresAt": "2026-10-15T18:00:00+03:00",
+                  "remainingSeconds": "21600"
+                }
+              ]
+            },
+            {
+              "dishID": "parsley-dish",
+              "dishName": "Parsley dish",
+              "score": "0.133333",
+              "demandBasis": "fallback",
+              "priorityExpiresAt": "2026-10-15T18:00:00+03:00",
+              "reasons": [
+                {
+                  "productID": "parsley",
+                  "productName": "Parsley",
+                  "batchID": "parsley-risk",
+                  "quantityPerPortion": "5000",
+                  "riskQuantity": "1000",
+                  "targetPortions": "1",
+                  "baseUnit": "g",
+                  "expiresAt": "2026-10-15T18:00:00+03:00",
+                  "remainingSeconds": "21600"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

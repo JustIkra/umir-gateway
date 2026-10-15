@@ -121,10 +121,14 @@ func compileScoped() (*scopeContract, error) {
 }
 
 func decodeScoped(data []byte) (any, error) {
+	return decodeScopedValues(data, false)
+}
+
+func decodeScopedValues(data []byte, allowNull bool) (any, error) {
 	if err := strictjson.CheckText(data); err != nil {
 		return nil, err
 	}
-	if err := checkScopedJSON(data, 0); err != nil {
+	if err := checkScopedJSON(data, 0, allowNull); err != nil {
 		return nil, err
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
@@ -139,12 +143,12 @@ func decodeScoped(data []byte) (any, error) {
 	return value, nil
 }
 
-func checkScopedJSON(data []byte, depth int) error {
+func checkScopedJSON(data []byte, depth int, allowNull bool) error {
 	if depth > 64 {
 		return errors.New("JSON nesting limit")
 	}
 	data = bytes.TrimSpace(data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+	if len(data) == 0 || (!allowNull && bytes.Equal(data, []byte("null"))) {
 		return errors.New("missing JSON value")
 	}
 	switch data[0] {
@@ -154,7 +158,7 @@ func checkScopedJSON(data []byte, depth int) error {
 			return err
 		}
 		for _, v := range fields {
-			if err := checkScopedJSON(v, depth+1); err != nil {
+			if err := checkScopedJSON(v, depth+1, allowNull); err != nil {
 				return err
 			}
 		}
@@ -164,7 +168,7 @@ func checkScopedJSON(data []byte, depth int) error {
 			return err
 		}
 		for _, v := range values {
-			if err := checkScopedJSON(v, depth+1); err != nil {
+			if err := checkScopedJSON(v, depth+1, allowNull); err != nil {
 				return err
 			}
 		}
@@ -177,7 +181,8 @@ func ValidateScopeWire(name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	v, err := decodeScoped(data)
+	allowNull := name == "ScopedSupplySuggestions" || name == "FINSupplySuggestions" || name == "FINSupplyRow"
+	v, err := decodeScopedValues(data, allowNull)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,25 @@
 {
-  "contractIdentity": "UA1:sha256:f1be4d340fcc609ff6429bfe509836afbe0040337e5f7c22702b90bd46063298",
+  "contractIdentity": "FIN1:sha256:8533e4c119573075214a52ee17dc30472d4cca5f580a99a330fb76ff44905663",
   "operations": {
+    "supplySuggestions": {
+      "path": "/api/v2/r/{restaurantID}/warehouse/supply-suggestions",
+      "method": "GET",
+      "capability": "stock.read",
+      "owner": "warehouse",
+      "parameters": [
+        {
+          "name": "restaurantID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      ],
+      "response": {
+        "$ref": "#/components/schemas/ScopedSupplySuggestions"
+      }
+    },
     "products": {
       "path": "/api/v2/r/{restaurantID}/warehouse/products",
       "method": "GET",
@@ -1131,7 +1150,7 @@
           "permissions": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Capability"
+              "$ref": "#/components/schemas/FINCapability"
             },
             "minItems": 1,
             "maxItems": 40,
@@ -1619,6 +1638,26 @@
           "pattern": "^expiration/"
         },
         "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse."
+      },
+      "CloseRuntime": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationID",
+          "expectedEpoch",
+          "lifecycleVersion"
+        ],
+        "properties": {
+          "operationID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "expectedEpoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
       },
       "CompleteMovementReport": {
         "type": "object",
@@ -2200,6 +2239,48 @@
           }
         }
       },
+      "DueExpiryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runID"
+        ],
+        "properties": {
+          "runID": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        }
+      },
+      "DueExpiryResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transitionedBatchIDs",
+          "finalWriteoffs",
+          "committedVersion",
+          "invalidationRequired"
+        ],
+        "properties": {
+          "transitionedBatchIDs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ID"
+            },
+            "minItems": 0,
+            "maxItems": 100000
+          },
+          "finalWriteoffs": {
+            "type": "integer",
+            "const": 0
+          },
+          "committedVersion": {
+            "$ref": "#/components/schemas/NonNegativeInt64"
+          },
+          "invalidationRequired": {
+            "type": "boolean"
+          }
+        }
+      },
       "EmptyOrder": {
         "type": "object",
         "additionalProperties": false,
@@ -2451,6 +2532,340 @@
           },
           "processedAt": {
             "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "FINCapability": {
+        "type": "string",
+        "enum": [
+          "catalog.read",
+          "catalog.write",
+          "stock.read",
+          "delivery.create",
+          "analytics.read",
+          "writeoff.confirm",
+          "menu.read",
+          "recommendations.read",
+          "order.prepare",
+          "order.confirm",
+          "order.read",
+          "feedback.submit",
+          "org.read",
+          "org.settings.write",
+          "restaurant.create",
+          "restaurant.delete",
+          "org.delete",
+          "membership.manage",
+          "invitation.manage",
+          "org.summary.read",
+          "runtime.register",
+          "runtime.close",
+          "expiry.due",
+          "consumer.menu.evaluate",
+          "consumer.order.evaluate",
+          "consumer.order.commit",
+          "consumer.order.resolve",
+          "feedback.anonymous.submit",
+          "feedback.read",
+          "feedback.export",
+          "consumer.recommendations.read"
+        ]
+      },
+      "FINDecimal": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)\\.[0-9]{6}$",
+        "maxLength": 64,
+        "description": "Finite nonnegative display decimal, exactly six places. Exact policy arithmetic precedes wire rounding."
+      },
+      "FINPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "historyDays",
+          "coverageThresholdDays",
+          "targetDays"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "FIN1"
+          },
+          "historyDays": {
+            "type": "integer",
+            "const": 7
+          },
+          "coverageThresholdDays": {
+            "type": "integer",
+            "const": 3
+          },
+          "targetDays": {
+            "type": "integer",
+            "const": 7
+          }
+        }
+      },
+      "FINRecommendation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dishID",
+          "dishName",
+          "score",
+          "demandBasis",
+          "priorityExpiresAt",
+          "reasons"
+        ],
+        "properties": {
+          "dishID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "dishName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "score": {
+            "$ref": "#/components/schemas/FINDecimal"
+          },
+          "demandBasis": {
+            "type": "string",
+            "enum": [
+              "history",
+              "fallback"
+            ]
+          },
+          "priorityExpiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FINRecommendationReason"
+            },
+            "minItems": 1,
+            "maxItems": 500
+          }
+        }
+      },
+      "FINRecommendationReason": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productID",
+          "productName",
+          "batchID",
+          "quantityPerPortion",
+          "riskQuantity",
+          "targetPortions",
+          "baseUnit",
+          "expiresAt",
+          "remainingSeconds"
+        ],
+        "properties": {
+          "productID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "productName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "batchID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "quantityPerPortion": {
+            "$ref": "#/components/schemas/PositiveQuantity"
+          },
+          "riskQuantity": {
+            "$ref": "#/components/schemas/PositiveQuantity"
+          },
+          "targetPortions": {
+            "$ref": "#/components/schemas/PositiveInt64"
+          },
+          "baseUnit": {
+            "$ref": "#/components/schemas/BaseUnit"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "remainingSeconds": {
+            "$ref": "#/components/schemas/NonNegativeInt64"
+          }
+        }
+      },
+      "FINRecommendations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evaluatedAt",
+          "stateVersion",
+          "policyVersion",
+          "horizonHours",
+          "window",
+          "coverage",
+          "items"
+        ],
+        "properties": {
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/NonNegativeInt64"
+          },
+          "policyVersion": {
+            "type": "string",
+            "const": "FIN1"
+          },
+          "horizonHours": {
+            "type": "integer",
+            "const": 72
+          },
+          "window": {
+            "$ref": "#/components/schemas/FINWindow"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FINRecommendation"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          }
+        }
+      },
+      "FINSupplyRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productID",
+          "productName",
+          "baseUnit",
+          "availableQuantity",
+          "consumedQuantity",
+          "averageDailyBaseUnits",
+          "coverageDays",
+          "onePortionDeficit",
+          "suggestedQuantity",
+          "blockedDishIDs",
+          "reasons"
+        ],
+        "properties": {
+          "productID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "productName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseUnit": {
+            "$ref": "#/components/schemas/BaseUnit"
+          },
+          "availableQuantity": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "consumedQuantity": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "averageDailyBaseUnits": {
+            "$ref": "#/components/schemas/FINDecimal"
+          },
+          "coverageDays": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FINDecimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "onePortionDeficit": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "suggestedQuantity": {
+            "$ref": "#/components/schemas/PositiveQuantity"
+          },
+          "blockedDishIDs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ID"
+            },
+            "minItems": 0,
+            "maxItems": 500,
+            "uniqueItems": true
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "low_coverage",
+                "stop_list_deficit"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true
+          }
+        }
+      },
+      "FINSupplySuggestions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evaluatedAt",
+          "stateVersion",
+          "policy",
+          "window",
+          "coverage",
+          "items"
+        ],
+        "properties": {
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/NonNegativeInt64"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/FINPolicy"
+          },
+          "window": {
+            "$ref": "#/components/schemas/FINWindow"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FINSupplyRow"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        }
+      },
+      "FINWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to",
+          "days"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "days": {
+            "type": "integer",
+            "const": 7
           }
         }
       },
@@ -2745,6 +3160,60 @@
           }
         }
       },
+      "JWKS": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JWTPublicKey"
+            },
+            "minItems": 1,
+            "maxItems": 3
+          }
+        }
+      },
+      "JWTPublicKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kty",
+          "crv",
+          "alg",
+          "use",
+          "kid",
+          "x"
+        ],
+        "properties": {
+          "kty": {
+            "type": "string",
+            "const": "OKP"
+          },
+          "crv": {
+            "type": "string",
+            "const": "Ed25519"
+          },
+          "alg": {
+            "type": "string",
+            "const": "EdDSA"
+          },
+          "use": {
+            "type": "string",
+            "const": "sig"
+          },
+          "kid": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "x": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
       "JournalRecord": {
         "type": "object",
         "additionalProperties": false,
@@ -2764,6 +3233,100 @@
             "$ref": "#/components/schemas/HistoryEvent"
           }
         }
+      },
+      "LiveEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "tenantID",
+              "epoch",
+              "sequence",
+              "topics"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "change"
+              },
+              "tenantID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "epoch": {
+                "$ref": "#/components/schemas/Epoch"
+              },
+              "sequence": {
+                "$ref": "#/components/schemas/PositiveInt64"
+              },
+              "topics": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "catalog",
+                    "stock",
+                    "menu",
+                    "orders",
+                    "analytics"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 5,
+                "uniqueItems": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "tenantID",
+              "reason"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "access-ended"
+              },
+              "tenantID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "revoked",
+                  "deleted",
+                  "session-expired",
+                  "auth-unavailable"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "tenantID",
+              "epoch"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "refresh-required"
+              },
+              "tenantID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "epoch": {
+                "$ref": "#/components/schemas/Epoch"
+              }
+            }
+          }
+        ]
       },
       "LocalDateTime": {
         "type": "string",
@@ -3176,6 +3739,21 @@
           }
         }
       },
+      "PositiveBatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BatchV2"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "remainingQuantity": {
+                "$ref": "#/components/schemas/PositiveQuantity"
+              }
+            }
+          }
+        ]
+      },
       "PositiveInt64": {
         "type": "string",
         "minLength": 1,
@@ -3222,6 +3800,64 @@
           },
           "baseUnit": {
             "$ref": "#/components/schemas/BaseUnit"
+          }
+        }
+      },
+      "ProductBatchPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productID",
+          "evaluatedAt",
+          "page",
+          "items"
+        ],
+        "properties": {
+          "productID": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageIdentity"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/ProductBatchRow"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ProductBatchRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batch",
+          "baseUnit",
+          "status"
+        ],
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/PositiveBatch"
+          },
+          "baseUnit": {
+            "$ref": "#/components/schemas/BaseUnit"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "pending_writeoff"
+            ]
           }
         }
       },
@@ -3521,6 +4157,107 @@
           }
         }
       },
+      "RegisterRuntime": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operationID",
+          "expectedEpoch",
+          "lifecycleVersion",
+          "settings"
+        ],
+        "properties": {
+          "operationID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "expectedEpoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        }
+      },
+      "Registry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registryRevision",
+          "complete",
+          "entries",
+          "tombstones"
+        ],
+        "properties": {
+          "registryRevision": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "complete": {
+            "type": "boolean",
+            "const": true
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "minItems": 0,
+            "maxItems": 10000
+          },
+          "tombstones": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "restaurantID",
+                "orgID",
+                "lifecycleVersion"
+              ],
+              "properties": {
+                "restaurantID": {
+                  "$ref": "#/components/schemas/EntityID"
+                },
+                "orgID": {
+                  "$ref": "#/components/schemas/EntityID"
+                },
+                "lifecycleVersion": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "minItems": 0,
+            "maxItems": 10000
+          }
+        }
+      },
+      "RegistryEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurant",
+          "settings",
+          "services"
+        ],
+        "properties": {
+          "restaurant": {
+            "$ref": "#/components/schemas/Restaurant"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeReadiness"
+            },
+            "minItems": 0,
+            "maxItems": 3
+          }
+        }
+      },
       "RequestedPosition": {
         "type": "object",
         "description": "Input position. Serving assigns lineNo=1,2,... in array order. Repeated dishID values are allowed.",
@@ -3552,6 +4289,42 @@
           },
           "proposal": {
             "$ref": "#/components/schemas/OrderProposal"
+          }
+        }
+      },
+      "Restaurant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurantID",
+          "orgID",
+          "name",
+          "lifecycle",
+          "lifecycleVersion"
+        ],
+        "properties": {
+          "restaurantID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "orgID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "lifecycle": {
+            "type": "string",
+            "enum": [
+              "registering",
+              "ready",
+              "deleting",
+              "deleted"
+            ]
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
           }
         }
       },
@@ -3616,6 +4389,74 @@
           "Waiter"
         ]
       },
+      "RuntimeReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurantID",
+          "service",
+          "epoch",
+          "state",
+          "lifecycleVersion"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "enum": [
+              "warehouse",
+              "serving",
+              "gateway"
+            ]
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "closed"
+            ]
+          },
+          "lifecycleVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "restaurantID": {
+            "$ref": "#/components/schemas/EntityID"
+          }
+        },
+        "description": "Readiness for one explicit restaurant and service, bound to lifecycleVersion and exact peer epoch. Registry envelope restaurantID and runtime route restaurantID must agree with this value."
+      },
+      "RuntimeStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "service",
+          "epoch",
+          "ready",
+          "tzdataVersion"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "enum": [
+              "warehouse",
+              "serving",
+              "gateway"
+            ]
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "tzdataVersion": {
+            "type": "string"
+          }
+        }
+      },
       "ScopedDeliveryReceipt": {
         "type": "object",
         "additionalProperties": false,
@@ -3677,6 +4518,22 @@
           },
           "result": {
             "$ref": "#/components/schemas/DishDetails"
+          }
+        }
+      },
+      "ScopedDueExpiryResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "result"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/BusinessContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/DueExpiryResult"
           }
         }
       },
@@ -3760,6 +4617,22 @@
           }
         }
       },
+      "ScopedProductBatches": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "result"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/BusinessContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProductBatchPage"
+          }
+        }
+      },
       "ScopedProducts": {
         "type": "object",
         "additionalProperties": false,
@@ -3792,6 +4665,22 @@
           }
         }
       },
+      "ScopedSupplySuggestions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "result"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/BusinessContext"
+          },
+          "result": {
+            "$ref": "#/components/schemas/FINSupplySuggestions"
+          }
+        }
+      },
       "ScopedWriteoffResult": {
         "type": "object",
         "additionalProperties": false,
@@ -3805,6 +4694,130 @@
           },
           "result": {
             "$ref": "#/components/schemas/WriteoffResult"
+          }
+        }
+      },
+      "ServiceAuthorizationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "restaurantID",
+          "operation",
+          "epoch"
+        ],
+        "properties": {
+          "restaurantID": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "expiry.due",
+              "runtime.register",
+              "runtime.close"
+            ]
+          },
+          "epoch": {
+            "$ref": "#/components/schemas/Epoch"
+          }
+        }
+      },
+      "ServiceClaims": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "iss",
+          "aud",
+          "iat",
+          "nbf",
+          "exp",
+          "jti",
+          "operation",
+          "permissions",
+          "kind",
+          "sub",
+          "org_id",
+          "tenant_id",
+          "runtime_epoch",
+          "lifecycle_version",
+          "azp"
+        ],
+        "properties": {
+          "iss": {
+            "type": "string",
+            "const": "urn:umir:auth"
+          },
+          "aud": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "umir-warehouse",
+                "umir-serving",
+                "umir-gateway",
+                "umir-feedback"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true
+          },
+          "iat": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nbf": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exp": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "jti": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            },
+            "minItems": 1,
+            "maxItems": 40,
+            "uniqueItems": true
+          },
+          "kind": {
+            "type": "string",
+            "const": "service"
+          },
+          "sub": {
+            "type": "string",
+            "enum": [
+              "service:auth",
+              "service:gateway"
+            ]
+          },
+          "org_id": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/EntityID"
+          },
+          "runtime_epoch": {
+            "$ref": "#/components/schemas/Epoch"
+          },
+          "lifecycle_version": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "azp": {
+            "type": "string",
+            "enum": [
+              "umir-auth",
+              "umir-gateway"
+            ]
           }
         }
       },
@@ -3952,7 +4965,7 @@
             "$ref": "#/components/schemas/ServingContext"
           },
           "result": {
-            "$ref": "#/components/schemas/Recommendations"
+            "$ref": "#/components/schemas/FINRecommendations"
           }
         }
       },
@@ -4448,652 +5461,9 @@
             "$ref": "#/components/schemas/ID"
           }
         }
-      },
-      "LiveEvent": {
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "type",
-              "tenantID",
-              "epoch",
-              "sequence",
-              "topics"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "change"
-              },
-              "tenantID": {
-                "$ref": "#/components/schemas/EntityID"
-              },
-              "epoch": {
-                "$ref": "#/components/schemas/Epoch"
-              },
-              "sequence": {
-                "$ref": "#/components/schemas/PositiveInt64"
-              },
-              "topics": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "catalog",
-                    "stock",
-                    "menu",
-                    "orders",
-                    "analytics"
-                  ]
-                },
-                "minItems": 1,
-                "maxItems": 5,
-                "uniqueItems": true
-              }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "type",
-              "tenantID",
-              "reason"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "access-ended"
-              },
-              "tenantID": {
-                "$ref": "#/components/schemas/EntityID"
-              },
-              "reason": {
-                "type": "string",
-                "enum": [
-                  "revoked",
-                  "deleted",
-                  "session-expired",
-                  "auth-unavailable"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "type",
-              "tenantID",
-              "epoch"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "refresh-required"
-              },
-              "tenantID": {
-                "$ref": "#/components/schemas/EntityID"
-              },
-              "epoch": {
-                "$ref": "#/components/schemas/Epoch"
-              }
-            }
-          }
-        ]
-      },
-      "Registry": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "registryRevision",
-          "complete",
-          "entries",
-          "tombstones"
-        ],
-        "properties": {
-          "registryRevision": {
-            "$ref": "#/components/schemas/Version"
-          },
-          "complete": {
-            "type": "boolean",
-            "const": true
-          },
-          "entries": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RegistryEntry"
-            },
-            "minItems": 0,
-            "maxItems": 10000
-          },
-          "tombstones": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "restaurantID",
-                "orgID",
-                "lifecycleVersion"
-              ],
-              "properties": {
-                "restaurantID": {
-                  "$ref": "#/components/schemas/EntityID"
-                },
-                "orgID": {
-                  "$ref": "#/components/schemas/EntityID"
-                },
-                "lifecycleVersion": {
-                  "$ref": "#/components/schemas/Version"
-                }
-              }
-            },
-            "minItems": 0,
-            "maxItems": 10000
-          }
-        }
-      },
-      "RegistryEntry": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "restaurant",
-          "settings",
-          "services"
-        ],
-        "properties": {
-          "restaurant": {
-            "$ref": "#/components/schemas/Restaurant"
-          },
-          "settings": {
-            "$ref": "#/components/schemas/Settings"
-          },
-          "services": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RuntimeReadiness"
-            },
-            "minItems": 0,
-            "maxItems": 3
-          }
-        }
-      },
-      "Restaurant": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "restaurantID",
-          "orgID",
-          "name",
-          "lifecycle",
-          "lifecycleVersion"
-        ],
-        "properties": {
-          "restaurantID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "orgID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "lifecycle": {
-            "type": "string",
-            "enum": [
-              "registering",
-              "ready",
-              "deleting",
-              "deleted"
-            ]
-          },
-          "lifecycleVersion": {
-            "$ref": "#/components/schemas/Version"
-          }
-        }
-      },
-      "RuntimeReadiness": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "restaurantID",
-          "service",
-          "epoch",
-          "state",
-          "lifecycleVersion"
-        ],
-        "properties": {
-          "service": {
-            "type": "string",
-            "enum": [
-              "warehouse",
-              "serving",
-              "gateway"
-            ]
-          },
-          "epoch": {
-            "$ref": "#/components/schemas/Epoch"
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "ready",
-              "closed"
-            ]
-          },
-          "lifecycleVersion": {
-            "$ref": "#/components/schemas/Version"
-          },
-          "restaurantID": {
-            "$ref": "#/components/schemas/EntityID"
-          }
-        },
-        "description": "Readiness for one explicit restaurant and service, bound to lifecycleVersion and exact peer epoch. Registry envelope restaurantID and runtime route restaurantID must agree with this value."
-      },
-      "RuntimeStatus": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "service",
-          "epoch",
-          "ready",
-          "tzdataVersion"
-        ],
-        "properties": {
-          "service": {
-            "type": "string",
-            "enum": [
-              "warehouse",
-              "serving",
-              "gateway"
-            ]
-          },
-          "epoch": {
-            "$ref": "#/components/schemas/Epoch"
-          },
-          "ready": {
-            "type": "boolean"
-          },
-          "tzdataVersion": {
-            "type": "string"
-          }
-        }
-      },
-      "ServiceAuthorizationRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "restaurantID",
-          "operation",
-          "epoch"
-        ],
-        "properties": {
-          "restaurantID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "operation": {
-            "type": "string",
-            "enum": [
-              "expiry.due",
-              "runtime.register",
-              "runtime.close"
-            ]
-          },
-          "epoch": {
-            "$ref": "#/components/schemas/Epoch"
-          }
-        }
-      },
-      "ServiceClaims": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "iss",
-          "aud",
-          "iat",
-          "nbf",
-          "exp",
-          "jti",
-          "operation",
-          "permissions",
-          "kind",
-          "sub",
-          "org_id",
-          "tenant_id",
-          "runtime_epoch",
-          "lifecycle_version",
-          "azp"
-        ],
-        "properties": {
-          "iss": {
-            "type": "string",
-            "const": "urn:umir:auth"
-          },
-          "aud": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "umir-warehouse",
-                "umir-serving",
-                "umir-gateway",
-                "umir-feedback"
-              ]
-            },
-            "minItems": 1,
-            "maxItems": 2,
-            "uniqueItems": true
-          },
-          "iat": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "nbf": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "exp": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "jti": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "operation": {
-            "type": "string"
-          },
-          "permissions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Capability"
-            },
-            "minItems": 1,
-            "maxItems": 40,
-            "uniqueItems": true
-          },
-          "kind": {
-            "type": "string",
-            "const": "service"
-          },
-          "sub": {
-            "type": "string",
-            "enum": [
-              "service:auth",
-              "service:gateway"
-            ]
-          },
-          "org_id": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "runtime_epoch": {
-            "$ref": "#/components/schemas/Epoch"
-          },
-          "lifecycle_version": {
-            "$ref": "#/components/schemas/Version"
-          },
-          "azp": {
-            "type": "string",
-            "enum": [
-              "umir-auth",
-              "umir-gateway"
-            ]
-          }
-        }
-      },
-      "RegisterRuntime": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "operationID",
-          "expectedEpoch",
-          "lifecycleVersion",
-          "settings"
-        ],
-        "properties": {
-          "operationID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "expectedEpoch": {
-            "$ref": "#/components/schemas/Epoch"
-          },
-          "lifecycleVersion": {
-            "$ref": "#/components/schemas/Version"
-          },
-          "settings": {
-            "$ref": "#/components/schemas/Settings"
-          }
-        }
-      },
-      "CloseRuntime": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "operationID",
-          "expectedEpoch",
-          "lifecycleVersion"
-        ],
-        "properties": {
-          "operationID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "expectedEpoch": {
-            "$ref": "#/components/schemas/Epoch"
-          },
-          "lifecycleVersion": {
-            "$ref": "#/components/schemas/Version"
-          }
-        }
-      },
-      "ScopedDueExpiryResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "context",
-          "result"
-        ],
-        "properties": {
-          "context": {
-            "$ref": "#/components/schemas/BusinessContext"
-          },
-          "result": {
-            "$ref": "#/components/schemas/DueExpiryResult"
-          }
-        }
-      },
-      "DueExpiryResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "transitionedBatchIDs",
-          "finalWriteoffs",
-          "committedVersion",
-          "invalidationRequired"
-        ],
-        "properties": {
-          "transitionedBatchIDs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ID"
-            },
-            "minItems": 0,
-            "maxItems": 100000
-          },
-          "finalWriteoffs": {
-            "type": "integer",
-            "const": 0
-          },
-          "committedVersion": {
-            "$ref": "#/components/schemas/NonNegativeInt64"
-          },
-          "invalidationRequired": {
-            "type": "boolean"
-          }
-        }
-      },
-      "DueExpiryRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "runID"
-        ],
-        "properties": {
-          "runID": {
-            "$ref": "#/components/schemas/EntityID"
-          }
-        }
-      },
-      "JWKS": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "keys"
-        ],
-        "properties": {
-          "keys": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/JWTPublicKey"
-            },
-            "minItems": 1,
-            "maxItems": 3
-          }
-        }
-      },
-      "JWTPublicKey": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "kty",
-          "crv",
-          "alg",
-          "use",
-          "kid",
-          "x"
-        ],
-        "properties": {
-          "kty": {
-            "type": "string",
-            "const": "OKP"
-          },
-          "crv": {
-            "type": "string",
-            "const": "Ed25519"
-          },
-          "alg": {
-            "type": "string",
-            "const": "EdDSA"
-          },
-          "use": {
-            "type": "string",
-            "const": "sig"
-          },
-          "kid": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "x": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9_-]{43}$"
-          }
-        }
-      },
-      "ScopedProductBatches": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "context",
-          "result"
-        ],
-        "properties": {
-          "context": {
-            "$ref": "#/components/schemas/BusinessContext"
-          },
-          "result": {
-            "$ref": "#/components/schemas/ProductBatchPage"
-          }
-        }
-      },
-      "ProductBatchPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "productID",
-          "evaluatedAt",
-          "page",
-          "items"
-        ],
-        "properties": {
-          "productID": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "evaluatedAt": {
-            "$ref": "#/components/schemas/Instant"
-          },
-          "page": {
-            "$ref": "#/components/schemas/PageIdentity"
-          },
-          "items": {
-            "type": "array",
-            "minItems": 0,
-            "maxItems": 500,
-            "items": {
-              "$ref": "#/components/schemas/ProductBatchRow"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          }
-        }
-      },
-      "ProductBatchRow": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "batch",
-          "baseUnit",
-          "status"
-        ],
-        "properties": {
-          "batch": {
-            "$ref": "#/components/schemas/PositiveBatch"
-          },
-          "baseUnit": {
-            "$ref": "#/components/schemas/BaseUnit"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "available",
-              "pending_writeoff"
-            ]
-          }
-        }
-      },
-      "PositiveBatch": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/BatchV2"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "remainingQuantity": {
-                "$ref": "#/components/schemas/PositiveQuantity"
-              }
-            }
-          }
-        ]
       }
     }
   },
-  "predecessorContractIdentity": "sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6"
+  "predecessorContractIdentity": "UA1:sha256:f1be4d340fcc609ff6429bfe509836afbe0040337e5f7c22702b90bd46063298",
+  "originalContractIdentity": "sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6"
 }

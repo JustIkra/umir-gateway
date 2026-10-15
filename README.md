@@ -1,5 +1,9 @@
 # umir-gateway
 
+The scoped FIN1 profile adds `GET /api/v2/r/{restaurantID}/warehouse/supply-suggestions` with existing `stock.read` authority and adopts the revised recommendation response on the existing Serving route. The [Factory contract supplement](https://github.com/JustIkra/umir-factory/blob/80c240065892153129b590f4bdbd2411b7c0319a/docs/completion-api-amendment.md) defines policy; Warehouse and Serving own the calculations. Private recommendation-input routes remain inaccessible to browsers. Each public read obtains a fresh Auth decision and forwards once with fixed service audiences.
+
+FIN1 reply validation checks scope, current settings, state version, capture instant, the 168-hour window and history-coverage facts. Recommendation reasons must identify eligible horizon expiries and their captured remaining seconds. Null is allowed only for schema-declared no-history supply coverage; other inputs and replies keep their existing null refusal. Invalid or unavailable upstream data never becomes a successful empty result. Gateway preserves owner values and does not calculate ranking or supply quantities.
+
 Единый API-вход для системы одного ресторана. Gateway передаёт запросы в serving и warehouse; бизнес-правила выполняются в этих сервисах.
 
 ## Текущее состояние
@@ -102,13 +106,13 @@ Organization analytics and restaurant business routes retain their scoped handle
 The operator aliases retain their existing five paths and wire models.
 
 The embedded [Auth contract](internal/operatorhttp/auth-contract.json) is a projection
-of Factory's public/private v2 documents at checkpoint
-`66b827cf49fa70777dcba7b54fb7a3d05e64407c`. It records both source hashes. Regenerate it
-with Node 24 and compare the output before changing a contract:
+of Factory's composed FIN1 public/private documents at checkpoint
+`80c240065892153129b590f4bdbd2411b7c0319a`. It records both source hashes. Regenerate it
+with Node and compare the output before changing a contract:
 
 ```sh
-node scripts/sync-auth-contract.mjs /path/to/factory/docs/api/backend-v2-public.json \
-  /path/to/factory/docs/api/backend-v2-private.json internal/operatorhttp/auth-contract.json
+node scripts/sync-auth-contract.mjs /path/to/factory/docs/api/completion-v1-composed-public.json \
+  /path/to/factory/docs/api/completion-v1-composed-private.json internal/operatorhttp/auth-contract.json
 ```
 
 Gateway rejects unknown or duplicate fields at every JSON depth, invalid path/body
@@ -167,7 +171,7 @@ legacy topology retains its existing listener configuration.
 
 Business routes use `/api/v2/r/{restaurantID}/warehouse/*` and
 `/api/v2/r/{restaurantID}/serving/*`. The restaurant ID must be a canonical UUIDv4.
-Only frozen contract operations are public. Gateway maps each operation to its
+Only composed contract operations are public. Gateway maps each operation to its
 required capability and fixed audiences. Serving receives Serving and Warehouse
 audiences for authorized consumer calls. This does not expose consumer paths to
 the browser or grant public stock/writeoff access. Every dispatch obtains a fresh
@@ -182,10 +186,11 @@ token and configured peer key. A declared `X-Umir-Runtime-Epoch` is the original
 command epoch and is validated, then preserved. No body, query override, header,
 wildcard, or default restaurant assigns a scope.
 
-The embedded `internal/httpapi/scoped-contract.json` contains 30 operation mappings
-and 130 referenced schemas selected unchanged from C2 contract
-`2.0.0-draft.2`, identity
-`sha256:733e102ff0b4f52bb49d435716f9f1720642c8fad3a8a5d0685847071950e9e6`.
+The embedded `internal/httpapi/scoped-contract.json` records the exact composed FIN1
+profile SHA-256. It retains the C2/UA1 operation mappings and adds supply suggestions.
+The predecessor authorization and scoped recommendation schemas change explicitly;
+unrelated predecessor schema definitions remain unchanged. Original C2/UA1 artifacts
+and evidence keep their own identities. The generator retains every reachable schema.
 Inputs reject unknown/duplicate keys, nulls, trailing JSON, invalid text, duplicate
 query values, and raw semicolon separators. Business bodies are limited to 1 MiB;
 Feedback bodies to 16 KiB. Ordinary business bodies and raw query strings retain
@@ -822,17 +827,17 @@ adds no Gateway credential or caller authority. Gateway retains its exact five
 service credential references and separate control credential. Source/profile
 handoff is separate from actual Auth/Feedback provisioning and J1/E acceptance.
 
-## UA1 additive API profile
+## Composed FIN1 API profile on UA1
 
 The UA1 projection adds GET /api/v2/r/{restaurantID}/warehouse/products/{productID}/batches, GET /api/v2/orgs/{orgID}/members, GET /api/v2/orgs/{orgID}/invitations and POST /api/v2/orgs/{orgID}/invitations/{invitationID}/resend-link. Batch reads require stock.read; organization collections and link administration require current own-org Admin authority. Warehouse and Auth own cursor state, FEFO and mail decisions.
 
 Gateway keeps browser cookie, Origin and CSRF guards, forwards the retained command and query once, and verifies nested scope/product/capture identities. Auth collection RefreshRequired 409, LimitExceeded 503 and ScopeDeleted 410 retain their owner metadata. Link resend receipts must match the route invitation resourceID. Owner or transport uncertainty never generates a new command or automatic retry.
 
-Generate Factory's composed UA1 public/private profiles first. Regenerate the Gateway projections with:
+Generate Factory's composed FIN1 public/private profiles first. Regenerate the Gateway projections with:
 
 ~~~sh
 node scripts/sync-auth-contract.mjs PUBLIC PRIVATE internal/operatorhttp/auth-contract.json
 node scripts/sync-scoped-contract.mjs PUBLIC internal/httpapi/scoped-contract.json
 ~~~
 
-PUBLIC and PRIVATE are the composed profile paths, not the original frozen C2 inputs. Both projections record the exact input SHA-256. The scoped compiler keeps its explicit operation/capability/owner bindings. Original C2 schemas and all67 evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.
+PUBLIC and PRIVATE are `completion-v1-composed-public.json` and `completion-v1-composed-private.json`. The generators require version `2.0.0-FIN.1`. Both projections record exact input SHA-256 values. The scoped compiler keeps explicit operation/capability/owner bindings and all reachable schemas. Original C2/UA1 inputs and historical evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.

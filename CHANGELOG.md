@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Adopt the composed FIN1 profile for supply suggestions and current recommendations. Preserve exact forwarded values, narrow operation audiences and unrelated C2/UA1 schema definitions. Validate capture, period, coverage and reason identities; allow schema-declared null supply coverage without relaxing other input null checks. Keep private recommendation facts inaccessible to browsers.
+
 - Synchronize SSE timer setup before advancing the injected clock, bound test stream reads and require terminal/EOF assertions. Repeat affected race regressions 100 times in Linux CI while preserving production stream behavior.
 
 - Publish the complete queued change burst before waking the SSE test reader.

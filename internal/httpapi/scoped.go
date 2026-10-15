@@ -344,7 +344,7 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 	if response.Status != expected {
 		return errors.New("unexpected upstream status")
 	}
-	value, err := decodeScoped(response.Body)
+	value, err := decodeScopedValues(response.Body, op.id == "supplySuggestions")
 	if err != nil {
 		return err
 	}
@@ -401,6 +401,9 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 	}
 	if envelope.Context.TenantID != "" && (envelope.Context.TenantID != decision.TenantID || envelope.Context.OrgID != decision.OrgID || (expectedEpoch != "" && envelope.Context.RuntimeEpoch != expectedEpoch)) {
 		return errors.New("business scope mismatch")
+	}
+	if op.id == "supplySuggestions" || op.id == "recommendations" {
+		return validatePlanningCapture(op.id, response.Body, decision.Settings)
 	}
 	return nil
 }
