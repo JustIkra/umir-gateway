@@ -1,7 +1,7 @@
 {
   "source": {
-    "publicSHA256": "462737d7dc6e28f548ba931ff3e93c17007dfa41296b7af4ac987f854eb2d100",
-    "privateSHA256": "0d64e17f1ca7f92128ec755ea3c405df8af935f6a2a17ecbb7d437723d8f20b3"
+    "publicSHA256": "2be37f544a1ababa92cf16a4652826281db7f9b0e3d64bf1b389be2af0e0c873",
+    "privateSHA256": "2d21db8cd51085196b8294615b7db2afd68b540fcd4cbf90d0e67e4fb50a45d3"
   },
   "operations": {
     "csrf": {
@@ -790,7 +790,8 @@
         "not": {
           "pattern": "^expiration/"
         },
-        "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse."
+        "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse.",
+        "maxLength": 256
       },
       "SessionIssued": {
         "type": "object",
@@ -2169,14 +2170,36 @@
                 "minLength": 1
               },
               "purpose": {
-                "type": "string",
-                "enum": [
-                  "login",
-                  "password_reset"
-                ]
+                "const": "login"
               },
               "rememberMe": {
                 "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commandID",
+              "challengeID",
+              "proof",
+              "purpose",
+              "newPassword"
+            ],
+            "properties": {
+              "commandID": {
+                "$ref": "#/components/schemas/ClientCommandID"
+              },
+              "challengeID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "proof": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "const": "password_reset"
               },
               "newPassword": {
                 "type": "string",

@@ -26,6 +26,7 @@ type RemoteAPI struct {
 	boundary     *API
 	auth         AuthClient
 	newCommandID func() string
+	registration *registrationLimits
 }
 
 func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
@@ -41,7 +42,7 @@ func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
 	default:
 		return nil, errors.New("operatorhttp: cookie mode and public origin do not match")
 	}
-	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID}, nil
+	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID, registration: &registrationLimits{}}, nil
 }
 
 func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

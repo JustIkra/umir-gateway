@@ -319,9 +319,13 @@ func TestAuthV2LocalErrorsAndBodyLimit(t *testing.T) {
 	if w.Code != 400 || calls.Load() != 0 {
 		t.Errorf("reserved command=%d %s, calls=%d", w.Code, w.Body, calls.Load())
 	}
-	w = callAuth(api, http.MethodPost, "/api/v2/session", `{"login":"operator","password":"password-secret","commandID":"`+strings.Repeat("c", 9<<10)+`"}`, nil)
+	w = callAuth(api, http.MethodPost, "/api/v2/session", `{"login":"operator","password":"password-secret","commandID":"`+strings.Repeat("c", 256)+`"}`+strings.Repeat(" ", 9<<10), nil)
 	if w.Code != 200 {
-		t.Errorf("valid v2 request under 1 MiB=%d %s", w.Code, w.Body)
+		t.Errorf("valid command with JSON whitespace under 1 MiB=%d %s", w.Code, w.Body)
+	}
+	w = callAuth(api, http.MethodPost, "/api/v2/session", `{"login":"operator","password":"password-secret","commandID":"`+strings.Repeat("c", 257)+`"}`, nil)
+	if w.Code != 400 || calls.Load() != 1 {
+		t.Errorf("oversized command reached Auth: %d calls=%d", w.Code, calls.Load())
 	}
 }
 

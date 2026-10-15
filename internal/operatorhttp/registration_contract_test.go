@@ -21,6 +21,11 @@ func TestRegistrationFacadeStrictInputs(t *testing.T) {
 	}
 	for _, bad := range []string{
 		strings.Replace(body, `"password":"valid-password"`, `"password":"short"`, 1),
+		strings.Replace(body, `"password":"valid-password"`, `"password":null`, 1),
+		strings.Replace(body, `"purpose":"registration"`, `"purpose":"foo"`, 1),
+		strings.Replace(body, `"purpose":"registration"`, `"purpose":"password_reset"`, 1),
+		strings.Replace(body, `"commandID":"register-complete"`, `"commandID":"`+strings.Repeat("x", 257)+`"`, 1),
+		strings.Replace(body, `"purpose":"registration"`, `"purpose":"registration","purpose":"registration"`, 1),
 		strings.Replace(body, `"displayName":"New User"`, `"displayName":"x"`, 1),
 		strings.Replace(body, `"rememberMe":true`, `"rememberMe":true,"newPassword":"forbidden-password"`, 1),
 		strings.Replace(body, `"rememberMe":true`, `"rememberMe":true,"newPassword":""`, 1),
@@ -30,6 +35,14 @@ func TestRegistrationFacadeStrictInputs(t *testing.T) {
 		complete.Body = []byte(bad)
 		if _, err := ValidateFacadeRequest(complete); err == nil {
 			t.Fatal("malformed registration accepted")
+		}
+	}
+}
+
+func TestRegistrationBeginRejectsUnknownPurposeAndLongCommand(t *testing.T) {
+	for _, body := range []string{`{"commandID":"begin","email":"a@umir.invalid","purpose":"foo"}`, `{"commandID":"begin","email":"a@umir.invalid","purpose":"registration","purpose":"registration"}`, `{"commandID":"` + strings.Repeat("x", 257) + `","email":"a@umir.invalid","purpose":"registration"}`} {
+		if _, err := ValidateFacadeRequest(FacadeRequest{Method: "POST", Path: "/api/v2/email-challenges", Body: []byte(body)}); err == nil {
+			t.Fatal("invalid begin admitted")
 		}
 	}
 }

@@ -187,7 +187,7 @@ token and configured peer key. A declared `X-Umir-Runtime-Epoch` is the original
 command epoch and is validated, then preserved. No body, query override, header,
 wildcard, or default restaurant assigns a scope.
 
-The embedded `internal/httpapi/scoped-contract.json` records the exact composed FIN1
+The embedded `internal/httpapi/scoped-contract.json` records the exact composed REG1
 profile SHA-256. It retains the C2/UA1 operation mappings and adds supply suggestions.
 The predecessor authorization and scoped recommendation schemas change explicitly;
 unrelated predecessor schema definitions remain unchanged. Original C2/UA1 artifacts
@@ -834,18 +834,24 @@ The UA1 projection adds GET /api/v2/r/{restaurantID}/warehouse/products/{product
 
 Gateway keeps browser cookie, Origin and CSRF guards, forwards the retained command and query once, and verifies nested scope/product/capture identities. Auth collection RefreshRequired 409, LimitExceeded 503 and ScopeDeleted 410 retain their owner metadata. Link resend receipts must match the route invitation resourceID. Owner or transport uncertainty never generates a new command or automatic retry.
 
-Generate Factory's composed REG1 public/private profiles for Auth and the FIN1 public profile for scoped business routes first. Regenerate the Gateway projections with:
+Generate Factory's composed REG1 public/private profiles first. Auth and scoped projections use this same profile. Regenerate the Gateway projections with:
 
 ~~~sh
 node scripts/sync-auth-contract.mjs REG_PUBLIC REG_PRIVATE internal/operatorhttp/auth-contract.json
-node scripts/sync-scoped-contract.mjs FIN_PUBLIC internal/httpapi/scoped-contract.json
+node scripts/sync-scoped-contract.mjs REG_PUBLIC internal/httpapi/scoped-contract.json
 ~~~
 
-For the Auth projection, REG_PUBLIC and REG_PRIVATE are `registration-v1-composed-public.json` and `registration-v1-composed-private.json` (REG1). For the scoped projection, FIN_PUBLIC remains `completion-v1-composed-public.json` (FIN1). Both projections record exact input SHA-256 values. The scoped compiler keeps explicit operation/capability/owner bindings and all reachable schemas. Original C2/UA1 inputs and historical evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.
+For the Auth projection, REG_PUBLIC and REG_PRIVATE are `registration-v1-composed-public.json` and `registration-v1-composed-private.json` (REG1). The scoped projection uses the same REG_PUBLIC, including the REG1 command-ID bound. Both projections record exact input SHA-256 values. The scoped compiler keeps explicit operation/capability/owner bindings and all reachable schemas. Original C2/UA1 inputs and historical evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.
 
 
 ## Public registration contract (REG1)
 
 The Auth facade admits the configurable public registration flow from Factory issue 14. Begin email-challenges with purpose registration; complete with displayName/password and optional rememberMe after the existing code verification. Gateway forwards the original command/body, validates the strict REG1 schema and installs the confirmed session using the existing cookie path. Registration rejects newPassword, missing profile fields and path/body challenge mismatches. Auth owns the default-disabled flag, neutral address responses, limits, proof binding and atomic account creation.
 
-Regenerate only the Auth projection with registration-v1-composed-public.json and registration-v1-composed-private.json. The Auth generator requires version 2.0.0-REG.1 and records both exact source hashes. The scoped business projection remains on FIN1; use completion-v1-composed-public.json with sync-scoped-contract.mjs. Run make check after regeneration.
+Run `make sync-contract FACTORY_API=/absolute/path/to/factory/docs/api` to regenerate both projections together from registration-v1-composed-public.json and registration-v1-composed-private.json. The Auth generator requires version 2.0.0-REG.1 and records both exact source hashes. The scoped generator also requires REG1 and retains the FIN1 business routes and policy. Run make check after regeneration.
+
+### Registration admission limits
+
+Before forwarding registration begin to Auth, Gateway admits at most 30 distinct attempts per socket peer and 3 per preauth context per rolling 10 minutes. Identical body/preauth retries retain their admission so unknown outcomes can be recovered. Rotating preauth cookies still consumes the peer budget. The limiter is synchronized and bounded to 1024 peer and 4096 preauth identities; when full it refuses new identities instead of evicting active budgets. Entries expire after the window. Refusals use `429 RateLimited` and `Retry-After`.
+
+IP identity is the HTTP socket peer. Browser `Forwarded` and `X-Forwarded-For` values are not trusted for admission. Behind Nginx this conservative peer budget is shared by that proxy's visitors. Limits are process-local and reset on Gateway restart; Auth keeps the durable mail, address verification and account quotas. Public registration stays disabled until the deferred Auth storage cleanup is accepted. Strict REG1 input validation precedes admission; unknown purposes, duplicate fields, null passwords, fields from other completion purposes and command IDs over 256 code points are rejected before Auth.

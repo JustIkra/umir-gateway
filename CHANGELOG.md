@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resolve registration review #24: bounded peer/preauth admission with repeat recovery, stricter REG1 completion and command-ID schemas, negative contract cases, and one `make sync-contract` target for both REG1 projections.
+
 - Admit REG1 public registration in the strict Auth facade. Validate registration profile/password fields and preserve forwarding, command identity and session cookie behavior.
 
 - Recover login after an expired session cookie: CSRF bootstrap clears only a confirmed invalid session and makes one anonymous read. Both v2 and the operator alias retain active sessions and fail closed on unavailable authority.

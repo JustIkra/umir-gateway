@@ -1,5 +1,5 @@
 {
-  "contractIdentity": "FIN1:sha256:8533e4c119573075214a52ee17dc30472d4cca5f580a99a330fb76ff44905663",
+  "contractIdentity": "REG1:sha256:2be37f544a1ababa92cf16a4652826281db7f9b0e3d64bf1b389be2af0e0c873",
   "operations": {
     "supplySuggestions": {
       "path": "/api/v2/r/{restaurantID}/warehouse/supply-suggestions",
@@ -1637,7 +1637,8 @@
         "not": {
           "pattern": "^expiration/"
         },
-        "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse."
+        "description": "Caller-generated command identity. Preserve the same value and identical input on retry. The expiration/ namespace belongs to warehouse.",
+        "maxLength": 256
       },
       "CloseRuntime": {
         "type": "object",
