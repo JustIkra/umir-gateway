@@ -1,7 +1,7 @@
 {
   "source": {
-    "publicSHA256": "8533e4c119573075214a52ee17dc30472d4cca5f580a99a330fb76ff44905663",
-    "privateSHA256": "e562b6e929053d8c1a167eb71a8631c6fadd90d5ff6aed4660b4acf4d22c71c6"
+    "publicSHA256": "462737d7dc6e28f548ba931ff3e93c17007dfa41296b7af4ac987f854eb2d100",
+    "privateSHA256": "0d64e17f1ca7f92128ec755ea3c405df8af935f6a2a17ecbb7d437723d8f20b3"
   },
   "operations": {
     "csrf": {
@@ -2140,47 +2140,92 @@
             "type": "string",
             "enum": [
               "login",
-              "password_reset"
+              "password_reset",
+              "registration"
             ]
           }
         }
       },
       "EmailChallengeComplete": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "commandID",
-          "challengeID",
-          "proof",
-          "purpose"
-        ],
-        "properties": {
-          "commandID": {
-            "$ref": "#/components/schemas/ClientCommandID"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commandID",
+              "challengeID",
+              "proof",
+              "purpose"
+            ],
+            "properties": {
+              "commandID": {
+                "$ref": "#/components/schemas/ClientCommandID"
+              },
+              "challengeID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "proof": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "type": "string",
+                "enum": [
+                  "login",
+                  "password_reset"
+                ]
+              },
+              "rememberMe": {
+                "type": "boolean"
+              },
+              "newPassword": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 32
+              }
+            }
           },
-          "challengeID": {
-            "$ref": "#/components/schemas/EntityID"
-          },
-          "proof": {
-            "type": "string",
-            "minLength": 1
-          },
-          "purpose": {
-            "type": "string",
-            "enum": [
-              "login",
-              "password_reset"
-            ]
-          },
-          "rememberMe": {
-            "type": "boolean"
-          },
-          "newPassword": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 32
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "commandID",
+              "challengeID",
+              "proof",
+              "purpose",
+              "displayName",
+              "password"
+            ],
+            "properties": {
+              "commandID": {
+                "$ref": "#/components/schemas/ClientCommandID"
+              },
+              "challengeID": {
+                "$ref": "#/components/schemas/EntityID"
+              },
+              "proof": {
+                "type": "string",
+                "minLength": 1
+              },
+              "purpose": {
+                "const": "registration"
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 80
+              },
+              "password": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 32
+              },
+              "rememberMe": {
+                "type": "boolean"
+              }
+            }
           }
-        }
+        ]
       },
       "MembersPage": {
         "type": "object",

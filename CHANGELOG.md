@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Admit REG1 public registration in the strict Auth facade. Validate registration profile/password fields and preserve forwarding, command identity and session cookie behavior.
+
 - Recover login after an expired session cookie: CSRF bootstrap clears only a confirmed invalid session and makes one anonymous read. Both v2 and the operator alias retain active sessions and fail closed on unavailable authority.
 
 - Adopt the composed FIN1 profile for supply suggestions and current recommendations. Preserve exact forwarded values, narrow operation audiences and unrelated C2/UA1 schema definitions. Validate capture, period, coverage and reason identities; allow schema-declared null supply coverage without relaxing other input null checks. Keep private recommendation facts inaccessible to browsers.

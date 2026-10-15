@@ -9,7 +9,7 @@ const publicBytes = readFileSync(publicPath);
 const privateBytes = readFileSync(privatePath);
 const publicAPI = JSON.parse(publicBytes);
 const privateAPI = JSON.parse(privateBytes);
-if (publicAPI.info.version !== '2.0.0-FIN.1' || privateAPI.info.version !== '2.0.0-FIN.1') throw Error('Expected composed FIN1 profiles');
+if (publicAPI.info.version !== '2.0.0-REG.1' || privateAPI.info.version !== '2.0.0-REG.1') throw Error('Expected composed REG1 profiles');
 const operations = {};
 const schemas = {};
 const include = (value) => {

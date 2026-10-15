@@ -106,13 +106,12 @@ Organization analytics and restaurant business routes retain their scoped handle
 The operator aliases retain their existing five paths and wire models.
 
 The embedded [Auth contract](internal/operatorhttp/auth-contract.json) is a projection
-of Factory's composed FIN1 public/private documents at checkpoint
-`80c240065892153129b590f4bdbd2411b7c0319a`. It records both source hashes. Regenerate it
+of Factory's composed REG1 public/private documents. It records both source hashes. Regenerate it
 with Node and compare the output before changing a contract:
 
 ```sh
-node scripts/sync-auth-contract.mjs /path/to/factory/docs/api/completion-v1-composed-public.json \
-  /path/to/factory/docs/api/completion-v1-composed-private.json internal/operatorhttp/auth-contract.json
+node scripts/sync-auth-contract.mjs /path/to/factory/docs/api/registration-v1-composed-public.json \
+  /path/to/factory/docs/api/registration-v1-composed-private.json internal/operatorhttp/auth-contract.json
 ```
 
 Gateway rejects unknown or duplicate fields at every JSON depth, invalid path/body
@@ -835,11 +834,18 @@ The UA1 projection adds GET /api/v2/r/{restaurantID}/warehouse/products/{product
 
 Gateway keeps browser cookie, Origin and CSRF guards, forwards the retained command and query once, and verifies nested scope/product/capture identities. Auth collection RefreshRequired 409, LimitExceeded 503 and ScopeDeleted 410 retain their owner metadata. Link resend receipts must match the route invitation resourceID. Owner or transport uncertainty never generates a new command or automatic retry.
 
-Generate Factory's composed FIN1 public/private profiles first. Regenerate the Gateway projections with:
+Generate Factory's composed REG1 public/private profiles for Auth and the FIN1 public profile for scoped business routes first. Regenerate the Gateway projections with:
 
 ~~~sh
-node scripts/sync-auth-contract.mjs PUBLIC PRIVATE internal/operatorhttp/auth-contract.json
-node scripts/sync-scoped-contract.mjs PUBLIC internal/httpapi/scoped-contract.json
+node scripts/sync-auth-contract.mjs REG_PUBLIC REG_PRIVATE internal/operatorhttp/auth-contract.json
+node scripts/sync-scoped-contract.mjs FIN_PUBLIC internal/httpapi/scoped-contract.json
 ~~~
 
-PUBLIC and PRIVATE are `completion-v1-composed-public.json` and `completion-v1-composed-private.json`. The generators require version `2.0.0-FIN.1`. Both projections record exact input SHA-256 values. The scoped compiler keeps explicit operation/capability/owner bindings and all reachable schemas. Original C2/UA1 inputs and historical evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.
+For the Auth projection, REG_PUBLIC and REG_PRIVATE are `registration-v1-composed-public.json` and `registration-v1-composed-private.json` (REG1). For the scoped projection, FIN_PUBLIC remains `completion-v1-composed-public.json` (FIN1). Both projections record exact input SHA-256 values. The scoped compiler keeps explicit operation/capability/owner bindings and all reachable schemas. Original C2/UA1 inputs and historical evidence remain separate. Run make check, make quality-test, go mod verify and a clean go mod tidy check after regeneration.
+
+
+## Public registration contract (REG1)
+
+The Auth facade admits the configurable public registration flow from Factory issue 14. Begin email-challenges with purpose registration; complete with displayName/password and optional rememberMe after the existing code verification. Gateway forwards the original command/body, validates the strict REG1 schema and installs the confirmed session using the existing cookie path. Registration rejects newPassword, missing profile fields and path/body challenge mismatches. Auth owns the default-disabled flag, neutral address responses, limits, proof binding and atomic account creation.
+
+Regenerate only the Auth projection with registration-v1-composed-public.json and registration-v1-composed-private.json. The Auth generator requires version 2.0.0-REG.1 and records both exact source hashes. The scoped business projection remains on FIN1; use completion-v1-composed-public.json with sync-scoped-contract.mjs. Run make check after regeneration.
