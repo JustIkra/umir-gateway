@@ -95,6 +95,11 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/csrf":
 		var value CSRFResult
 		value, err = a.auth.CSRF(r.Context(), browser)
+		if err != nil && browser.SessionToken != "" && confirmedUnauthenticated(err) {
+			a.boundary.clearCookie(w, a.boundary.cookies.session)
+			browser.SessionToken = ""
+			value, err = a.auth.CSRF(r.Context(), browser)
+		}
 		if err == nil {
 			if value.PreauthToken != "" {
 				a.boundary.setCookie(w, a.boundary.cookies.preauth, value.PreauthToken, time.Time{})
@@ -250,4 +255,9 @@ func (a *RemoteAPI) fail(w http.ResponseWriter, r *http.Request, err error, alia
 		Details        json.RawMessage   `json:"details,omitempty"`
 		SessionRevoked *bool             `json:"sessionRevoked,omitempty"`
 	}{Code: code, Outcome: failure.Outcome, Message: "authentication request failed", Retryable: failure.Retryable, FieldErrors: failure.FieldErrors, Details: failure.Details, SessionRevoked: failure.SessionRevoked})
+}
+
+func confirmedUnauthenticated(err error) bool {
+	var failure *AuthFailure
+	return errors.As(err, &failure) && failure.Status == http.StatusUnauthorized && failure.Code == "Unauthenticated" && failure.Outcome == "not_committed"
 }

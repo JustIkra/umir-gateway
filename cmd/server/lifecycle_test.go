@@ -92,6 +92,11 @@ func TestGatewayChildProcess(t *testing.T) {
 func TestSIGTERMDrainsActiveResponseBeforeProcessExit(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/menu" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
 		close(started)
 		select {
 		case <-release:

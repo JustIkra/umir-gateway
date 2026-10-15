@@ -162,6 +162,8 @@ requests ran. A reused report is historical evidence, not a new runtime run.
 
 ### Backend v2 restaurant authorization (G2)
 
+An expired or invalid browser session cannot block a new login. On `GET /api/v2/csrf` and its operator alias, a confirmed Auth `401 Unauthenticated/not_committed` clears that session cookie and retries the read once without the session. The response contains only CSRF data; the new preauth stays in its HttpOnly cookie. Active sessions are retained. Transport, storage and other Auth failures do not downgrade to anonymous access.
+
 Auth mode requires `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY`, and
 `FEEDBACK_SERVICE_KEY` in addition to the Auth credential. Configure the three
 service URLs as private listener origins with no path, query, fragment, or user

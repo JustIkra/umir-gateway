@@ -74,6 +74,11 @@ func (a *RemoteAPI) serveFacade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := a.auth.Public(r.Context(), browser, in)
+	if err != nil && op.id == "csrf" && browser.SessionToken != "" && confirmedUnauthenticated(err) {
+		a.boundary.clearCookie(w, a.boundary.cookies.session)
+		browser.SessionToken = ""
+		result, err = a.auth.Public(r.Context(), browser, in)
+	}
 	if err != nil {
 		a.fail(w, r, err, false, strings.TrimPrefix(r.URL.Path, "/api/v2"))
 		return
