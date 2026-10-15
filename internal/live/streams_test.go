@@ -18,11 +18,13 @@ import (
 
 var start = time.Date(2026, 10, 12, 14, 0, 30, 0, moscow)
 
-// fakeClock fires its timers only when the test advances it.
+// fakeClock fires future timers when the test advances it.
 type fakeClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	timers []*fakeTimer
+	mu      sync.Mutex
+	now     time.Time
+	timers  []*fakeTimer
+	created int
+	changed chan struct{}
 }
 
 type fakeTimer struct {
@@ -51,8 +53,46 @@ func (c *fakeClock) NewTimer(d time.Duration) Timer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t := &fakeTimer{clock: c, at: c.now.Add(d), c: make(chan time.Time, 1)}
-	c.timers = append(c.timers, t)
+	if d <= 0 {
+		t.c <- c.now
+	} else {
+		c.timers = append(c.timers, t)
+	}
+	c.created++
+	if c.changed != nil {
+		close(c.changed)
+	}
+	c.changed = make(chan struct{})
 	return t
+}
+
+func (c *fakeClock) timerCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.created
+}
+
+func (c *fakeClock) waitTimers(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		c.mu.Lock()
+		created := c.created
+		if c.changed == nil {
+			c.changed = make(chan struct{})
+		}
+		changed := c.changed
+		c.mu.Unlock()
+		if created >= count {
+			return
+		}
+		select {
+		case <-changed:
+		case <-deadline.C:
+			t.Fatal("stream did not arm its owner-clock timers")
+		}
+	}
 }
 
 // advance moves the clock and fires every timer that is due.
@@ -72,6 +112,18 @@ func (c *fakeClock) advance(d time.Duration) {
 		kept = append(kept, t)
 	}
 	c.timers = kept
+}
+
+func TestFakeClockNonPositiveTimerIsReadyWithoutAdvance(t *testing.T) {
+	for _, delay := range []time.Duration{0, -time.Second} {
+		clock := &fakeClock{now: start}
+		timer := clock.NewTimer(delay)
+		select {
+		case <-timer.C():
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("a due timer waits for another owner-clock advance")
+		}
+	}
 }
 
 // fakeChanges is a journal that the test moves by hand.
@@ -166,7 +218,13 @@ type stream struct {
 // open returns the status, the headers and the stream; the body closes when the test ends.
 func open(t *testing.T, address, token string) (int, http.Header, *stream) {
 	t.Helper()
-	response, err := http.Get(address + "/?token=" + token)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address+"/?token="+token, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +260,14 @@ func (s *stream) next() string {
 }
 
 // greeted opens a stream and reads its first frames.
-func greeted(t *testing.T, address, token string) *stream {
+func (f *fixture) greeted(t *testing.T, address, token string) *stream {
 	t.Helper()
+	before := f.clock.timerCount()
 	_, _, s := open(t, address, token)
 	for range 4 {
 		s.next()
 	}
+	f.clock.waitTimers(t, before+3)
 	return s
 }
 
@@ -238,7 +298,7 @@ func TestStreamStartsWithHeadersRetryAndFourEvents(t *testing.T) {
 func TestChangeBurstsArriveAsOneEventWithTheLatestSeq(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
 	address := f.serve(t)
-	s := greeted(t, address, "a")
+	s := f.greeted(t, address, "a")
 	f.changes.mu.Lock()
 	f.changes.seq = 41
 	f.changes.seq++
@@ -255,7 +315,7 @@ func TestChangeBurstsArriveAsOneEventWithTheLatestSeq(t *testing.T) {
 
 func TestUpstreamChangesAreReported(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
-	s := greeted(t, f.serve(t), "a")
+	s := f.greeted(t, f.serve(t), "a")
 	f.upstream.Set(false)
 	if got := s.next(); got != `upstream {"available":false}` {
 		t.Fatalf("got %s", got)
@@ -269,8 +329,8 @@ func TestUpstreamChangesAreReported(t *testing.T) {
 func TestSessionEventsReachOnlyTheirSession(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
 	address := f.serve(t)
-	mine := greeted(t, address, "a")
-	other := greeted(t, address, "b")
+	mine := f.greeted(t, address, "a")
+	other := f.greeted(t, address, "b")
 	f.events.SessionExtended(operator.SessionKey("a"), 1, start.Add(40*time.Minute), start.Add(8*time.Hour))
 	if got := mine.next(); got != `session {"idleExpiresAt":"2026-10-12T14:40:30+03:00","absoluteExpiresAt":"2026-10-12T22:00:30+03:00"}` {
 		t.Fatalf("got %s", got)
@@ -299,7 +359,7 @@ func TestAnEndIsNeverReplacedByALaterExtension(t *testing.T) {
 
 func TestExpiryEndsTheStreamAfterPeekConfirmsIt(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
-	s := greeted(t, f.serve(t), "a")
+	s := f.greeted(t, f.serve(t), "a")
 	f.sessions.set(operator.Session{}, operator.ErrUnauthenticated)
 	f.clock.advance(30 * time.Minute)
 	for {
@@ -310,13 +370,16 @@ func TestExpiryEndsTheStreamAfterPeekConfirmsIt(t *testing.T) {
 		if got != `session-ended {"reason":"expired"}` {
 			t.Fatalf("got %s", got)
 		}
+		if rest, err := io.ReadAll(s.reader); err != nil || len(rest) != 0 {
+			t.Fatalf("expired stream stayed open: %q %v", rest, err)
+		}
 		return
 	}
 }
 
 func TestAMovedDeadlineIsReportedInsteadOfAnEnd(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
-	s := greeted(t, f.serve(t), "a")
+	s := f.greeted(t, f.serve(t), "a")
 	f.sessions.set(operator.Session{IdleExpiresAt: start.Add(50 * time.Minute), AbsoluteExpiresAt: start.Add(8 * time.Hour)}, nil)
 	f.clock.advance(30 * time.Minute)
 	for {
@@ -333,7 +396,7 @@ func TestAMovedDeadlineIsReportedInsteadOfAnEnd(t *testing.T) {
 
 func TestTicksFollowTheMinuteAndPingsKeepTheStreamAlive(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
-	s := greeted(t, f.serve(t), "a")
+	s := f.greeted(t, f.serve(t), "a")
 	f.clock.advance(15 * time.Second)
 	if got := s.next(); got != ": ping" {
 		t.Fatalf("after 15 s: %s", got)
@@ -350,8 +413,8 @@ func TestTicksFollowTheMinuteAndPingsKeepTheStreamAlive(t *testing.T) {
 func TestStreamLimits(t *testing.T) {
 	f := newFixture(t, 2, 3)
 	address := f.serve(t)
-	greeted(t, address, "a")
-	greeted(t, address, "a")
+	f.greeted(t, address, "a")
+	f.greeted(t, address, "a")
 	refused := func(token string) {
 		t.Helper()
 		response, err := http.Get(address + "/?token=" + token)
@@ -365,7 +428,7 @@ func TestStreamLimits(t *testing.T) {
 		}
 	}
 	refused("a")
-	greeted(t, address, "b")
+	f.greeted(t, address, "b")
 	refused("c")
 }
 
@@ -386,7 +449,7 @@ func TestASessionEndedBeforeTheWatchIsRefused(t *testing.T) {
 
 func TestCloseEndsEveryStream(t *testing.T) {
 	f := newFixture(t, DefaultPerSession, DefaultTotal)
-	s := greeted(t, f.serve(t), "a")
+	s := f.greeted(t, f.serve(t), "a")
 	f.streams.Close()
 	if rest, err := io.ReadAll(s.reader); err != nil || len(rest) != 0 {
 		t.Fatalf("after Close: %q %v", rest, err)

@@ -51,7 +51,7 @@ func TestG3SessionEndSurvivesDrainedNotification(t *testing.T) {
 
 func TestG3OlderDeadlineCannotReachSSEClient(t *testing.T) {
 	f := newFixture(t, 8, 64)
-	stream := greeted(t, f.serve(t), "session-token")
+	stream := f.greeted(t, f.serve(t), "session-token")
 	key := operator.SessionKey("session-token")
 	newer := start.Add(32 * time.Minute)
 	f.events.SessionExtended(key, 2, newer, start.Add(8*time.Hour))
@@ -82,7 +82,7 @@ func TestG3DelayedPreWatchCallbackCannotDowngradeGreeting(t *testing.T) {
 	f := newFixture(t, 8, 64)
 	newer := start.Add(32 * time.Minute)
 	f.sessions.set(operator.Session{PublicationRevision: 2, IdleExpiresAt: newer, AbsoluteExpiresAt: start.Add(8 * time.Hour)}, nil)
-	stream := greeted(t, f.serve(t), "session-token")
+	stream := f.greeted(t, f.serve(t), "session-token")
 	f.events.SessionExtended(operator.SessionKey("session-token"), 1, start.Add(31*time.Minute), start.Add(8*time.Hour))
 	f.changes.append()
 	if got := stream.next(); !strings.HasPrefix(got, "change ") {

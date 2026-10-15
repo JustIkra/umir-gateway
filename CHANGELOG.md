@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Synchronize SSE timer setup before advancing the injected clock, bound test stream reads and require terminal/EOF assertions. Repeat affected race regressions 100 times in Linux CI while preserving production stream behavior.
+
 - Publish the complete queued change burst before waking the SSE test reader.
   Preserve the seq43 assertion and production stream/journal behavior; the
   previous test depended on goroutine scheduling between two notifications.

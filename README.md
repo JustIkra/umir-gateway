@@ -517,6 +517,12 @@ docker run --rm -it ghcr.io/justikra/umir-gateway:sha-<SHA> hash-password
 3. отправляет cookie сессии со всеми запросами, а с изменяющими — ещё `Origin` и `X-CSRF-Token` из `session.csrfToken`;
 4. на `401` от guard входит снова и повторяет запрос с тем же `commandID`.
 
+## SSE regression checks
+
+The legacy SSE test client has a bounded request context. Its greeting helper waits for the injected clock's three initial timers before a test advances owner time. Non-positive fake timers fire immediately. Expiry requires both the terminal event and EOF; the existing production stream behavior is unchanged.
+
+CI repeats the expiry, moved-deadline, minute/ping and due-timer race cases 100 times on Linux before `make check`. The full build, lint, architecture and race suite remains required. Run the focused check with `GOWORK=off go test -race -count=100 -timeout=90s ./internal/live -run 'Test(ExpiryEndsTheStreamAfterPeekConfirmsIt|AMovedDeadlineIsReportedInsteadOfAnEnd|TicksFollowTheMinuteAndPingsKeepTheStreamAlive|FakeClockNonPositiveTimerIsReadyWithoutAdvance)$'`.
+
 ## Разработка
 
 Бизнес-ядро warehouse/serving работает в памяти. Gateway передаёт HTTP-вызовы и не владеет FEFO, идентификаторами команд или подтверждением заказа. [OpenAPI v1](https://github.com/JustIkra/umir-factory/blob/main/docs/api/openapi.yml) определяет публичные бизнес-маршруты. Семантический результат и разрешение незавершённой попытки устанавливает сервис-владелец, а gateway сохраняет полученный status/body.
