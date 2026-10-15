@@ -205,3 +205,72 @@ func TestG5AuthRuntimeCredentialAndPrivatePort(t *testing.T) {
 		t.Fatal("public/private port shared")
 	}
 }
+
+func authValues(extra map[string]string) map[string]string {
+	values := map[string]string{"AUTH_URL": "http://127.0.0.1:8085", "AUTH_SERVICE_KEY": "gateway-auth-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "SERVING_URL": "http://127.0.0.1:8083", "WAREHOUSE_URL": "http://127.0.0.1:8082", "FEEDBACK_URL": "http://127.0.0.1:8084", "SERVING_SERVICE_KEY": "s-key", "WAREHOUSE_SERVICE_KEY": "w-key", "FEEDBACK_SERVICE_KEY": "f-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": "http://127.0.0.1:8080"}
+	maps.Copy(values, extra)
+	return values
+}
+
+func TestW1RegistryRefreshDefaults(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RegistryRefreshInterval != 2*time.Second || cfg.RegistryMaxAge != 30*time.Second {
+		t.Fatalf("defaults: %s %s", cfg.RegistryRefreshInterval, cfg.RegistryMaxAge)
+	}
+	if cfg.InstanceID != "" {
+		t.Fatalf("instance has no configured default: %q", cfg.InstanceID)
+	}
+}
+
+func TestW1RegistryRefreshRanges(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"below one second":              {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "999ms"},
+		"above thirty seconds":          {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "31s", "GATEWAY_REGISTRY_MAX_AGE": "5m"},
+		"not a duration":                {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "soon"},
+		"zero":                          {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "0s"},
+		"max age under three intervals": {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "10s", "GATEWAY_REGISTRY_MAX_AGE": "29s"},
+		"max age not a duration":        {"GATEWAY_REGISTRY_MAX_AGE": "old"},
+		"max age negative":              {"GATEWAY_REGISTRY_MAX_AGE": "-1s"},
+		"default max age under default three intervals": {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "30s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(authValues(values))); err == nil {
+				t.Fatal("invalid registry refresh settings accepted")
+			}
+		})
+	}
+	for name, values := range map[string]map[string]string{
+		"minimum":      {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "1s", "GATEWAY_REGISTRY_MAX_AGE": "3s"},
+		"maximum":      {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "30s", "GATEWAY_REGISTRY_MAX_AGE": "90s"},
+		"explicit age": {"GATEWAY_REGISTRY_MAX_AGE": "1m"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(authValues(values))); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestW1InstanceID(t *testing.T) {
+	cfg, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": "gateway-2.eu_1"})))
+	if err != nil || cfg.InstanceID != "gateway-2.eu_1" {
+		t.Fatalf("instance: %q %v", cfg.InstanceID, err)
+	}
+	for _, bad := range []string{"has space", "line\nbreak", strings.Repeat("a", 129), "кириллица"} {
+		if _, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": bad}))); err == nil {
+			t.Fatalf("instance %q accepted", bad)
+		} else if strings.Contains(err.Error(), bad) {
+			t.Fatal("instance value echoed")
+		}
+	}
+}
+
+func TestW1RegistrySettingsIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_REGISTRY_REFRESH_INTERVAL": "soon"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}

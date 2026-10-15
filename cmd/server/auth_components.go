@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
@@ -19,9 +21,23 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
 
+// componentEnv carries the injected time and ticker mechanisms of the Auth-mode composition.
+type componentEnv struct {
+	now       func() time.Time
+	newTicker func(time.Duration) (<-chan time.Time, func())
+}
+
 func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error) {
+	return newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker})
+}
+
+func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
-	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport})
+	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport, Now: env.now, MaxAge: cfg.RegistryMaxAge})
+	if err != nil {
+		return components{}, err
+	}
+	refresher, err := authclient.NewRegistryRefresher(authclient.RefresherOptions{Client: client, Interval: cfg.RegistryRefreshInterval, NewTicker: env.newTicker, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
@@ -93,15 +109,22 @@ func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error
 			logger.Printf("health response failed")
 		}
 	})
-	expiry, err := expiration.NewScoped(expiration.ScopedOptions{GatewayEpoch: epoch, Auth: client, Warehouse: business, Changes: changes, Interval: cfg.ExpirationRunInterval, Timeout: cfg.UpstreamTimeout, Now: time.Now, NewRunID: newGatewayEpoch, NewTicker: newTicker, Logger: logger})
+	expiry, err := expiration.NewScoped(expiration.ScopedOptions{GatewayEpoch: epoch, Auth: schedulerAuth{Client: client, registry: refresher}, Warehouse: business, Changes: changes, Interval: cfg.ExpirationRunInterval, Timeout: cfg.UpstreamTimeout, Now: env.now, NewRunID: newGatewayEpoch, NewTicker: env.newTicker, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
+	instance := cfg.InstanceID
+	if instance == "" {
+		if instance, err = newGatewayEpoch(); err != nil {
+			return components{}, err
+		}
+	}
+	mux.Handle("/readyz", httpapi.NewReadyz(instance, schedulerCapability(expiry, env.now, logger), func() { logger.Printf("readiness response failed") }))
 	runtime, err := httpapi.NewGatewayRuntime(httpapi.RuntimeOptions{Auth: client, ServiceKey: cfg.AuthRuntimeServiceKey, Epoch: epoch, TZDataVersion: "go1.26.9", Changes: changes})
 	if err != nil {
 		return components{}, err
 	}
-	return components{handler: httpapi.WithRequestID(mux, rand.Text), privateHandler: withDeadline(runtime, 5*time.Second), scopedStreams: streams, expiry: expiry}, nil
+	return components{handler: httpapi.WithRequestID(mux, rand.Text), privateHandler: withDeadline(runtime, 5*time.Second), scopedStreams: streams, expiry: expiry, refresher: refresher}, nil
 }
 
 func newGatewayEpoch() (string, error) {
@@ -112,4 +135,41 @@ func newGatewayEpoch() (string, error) {
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
+}
+
+// schedulerAuth gives the scheduler Auth service tokens from the client and the registry from the
+// refresher, so the scheduler never reads the registry itself.
+type schedulerAuth struct {
+	*authclient.Client
+	registry *authclient.RegistryRefresher
+}
+
+func (a schedulerAuth) Registry(ctx context.Context) (expiration.Registry, error) {
+	return a.registry.Registry(ctx)
+}
+
+// schedulerCapability reports the scheduler state for readiness and logs each change once with the
+// iteration summary. The log carries times, a duration and a count, never an address or a value.
+func schedulerCapability(runner *expiration.ScopedRunner, now func() time.Time, logger *log.Logger) func() string {
+	var mu sync.Mutex
+	last := ""
+	return func() string {
+		health := runner.Health()
+		state := health.State(now(), runner.Interval())
+		mu.Lock()
+		changed := state != last
+		last = state
+		mu.Unlock()
+		if changed {
+			logger.Printf("event=scheduler_state state=%s last_start=%s last_success=%s last_duration=%s consecutive_failures=%d", state, formatInstant(health.LastStart), formatInstant(health.LastSuccess), health.LastDuration, health.ConsecutiveFailures)
+		}
+		return state
+	}
+}
+
+func formatInstant(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.UTC().Format(time.RFC3339)
 }

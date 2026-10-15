@@ -577,6 +577,9 @@ docker compose up --build -d --wait
 | `UPSTREAM_TIMEOUT` | `15s`; общий бюджет на приём тела запроса от клиента и обмен с upstream, формат Go duration. Ограничивает и каждый запуск проверки сроков |
 | `JOURNAL_CAPACITY` | `1000`; сколько последних записей хранит журнал изменений, от 1 до 100000 |
 | `EXPIRATION_RUN_INTERVAL` | `1s`; период запуска проверки сроков на складе, формат Go duration |
+| `GATEWAY_REGISTRY_REFRESH_INTERVAL` | `2s`; период чтения реестра Auth, от 1s до 30s; только режим Auth |
+| `GATEWAY_REGISTRY_MAX_AGE` | `30s`; предельный возраст последнего удачного снимка реестра для готовности, не меньше трёх периодов чтения; только режим Auth |
+| `GATEWAY_INSTANCE_ID` | случайный UUID; имя реплики в `/readyz`, до 128 символов `A-Za-z0-9._:-`; только режим Auth |
 | `TZ` в контейнере | `Europe/Moscow` |
 | `OPERATOR_*` | см. [настройки личного кабинета](#настройки) |
 
@@ -630,7 +633,9 @@ Preserve unrelated local edits, stage reviewed paths and check `git diff --cache
 
 ### Scoped due-expiry scheduler and private runtime (G5)
 
-Private runtime status uses the last validated Auth registry projection and the local registration table. It performs no synchronous call to Auth. A missing projection, failed later read, clock reversal or age of five seconds makes readiness false. Registry reads from the scheduler and registration path refresh the projection. Later-started reads take precedence over earlier completions, and callers receive independent copies.
+Private runtime status uses the last successful complete Auth registry snapshot and the local registration table. It performs no synchronous call to Auth. A separate refresher reads the registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default `2s`, 1s to 30s); a failed read keeps the previous snapshot, and a snapshot older than `GATEWAY_REGISTRY_MAX_AGE` (default `30s`, at least three refresh intervals) makes readiness false until the next successful read. The scheduler takes the registry from the refresher instead of reading it, so a slow or stalled scheduler iteration never affects readiness. Registration reads also refresh the snapshot. Later-started reads take precedence over earlier completions, and callers receive independent copies.
+
+`GET /readyz` on the public listener (never proxied by the frontend) answers `{"instance":"<GATEWAY_INSTANCE_ID>","capabilities":{"http":"ok","scheduler":"ok|degraded|down"}}` with status 200 while the process serves. `GATEWAY_INSTANCE_ID` defaults to a random UUID. The scheduler state follows the time since its last successful iteration (`degraded` after three scheduler intervals or any failed iteration, `down` after ten) and never changes the status code; the details are written to the log once per state change. `GET /healthz` only says that the process is alive. The image healthcheck probes `/readyz` in Auth mode and `/healthz` in the legacy mode.
 
 Each restaurant must have the matching local lifecycle version; deleting scopes and tombstones must be closed locally. Status does not require Auth to echo Gateway's own acknowledgment back before reporting that local registration is ready. Auth reads this status while reconciling and recording that acknowledgment. Restaurant commands still require fresh Auth authorization, and registration still checks fresh Auth state and signed control claims.
 

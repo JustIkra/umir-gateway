@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -100,6 +101,82 @@ type ScopedRunner struct {
 	opts         ScopedOptions
 	states       map[string]schedulerState
 	closedScopes map[string]bool
+	healthMu     sync.Mutex
+	health       SchedulerHealth
+}
+
+// SchedulerHealth summarizes the iterations of the scheduler: when the last one started, when one last
+// succeeded, how long the last finished one took and how many failed in a row. An iteration succeeds
+// when it obtained a usable registry and a ready Warehouse and reached every restaurant; a single
+// restaurant's failed dispatch does not fail it.
+type SchedulerHealth struct {
+	LastStart, LastSuccess time.Time
+	LastDuration           time.Duration
+	ConsecutiveFailures    int
+}
+
+// Scheduler states reported through readiness.
+const (
+	StateOK       = "ok"
+	StateDegraded = "degraded"
+	StateDown     = "down"
+)
+
+// Lag thresholds in scheduler intervals since the last successful iteration, and the number of
+// failed iterations in a row with no success at all that mean the scheduler is down.
+const (
+	degradedLagIntervals = 3
+	downLagIntervals     = 10
+	downStartupFailures  = 3
+)
+
+// State classifies the scheduler at now for an iteration pace of interval.
+func (h SchedulerHealth) State(now time.Time, interval time.Duration) string {
+	if h.LastSuccess.IsZero() {
+		if h.ConsecutiveFailures >= downStartupFailures {
+			return StateDown
+		}
+		return StateDegraded
+	}
+	lag := max(now.Sub(h.LastSuccess), 0)
+	switch {
+	case lag > downLagIntervals*interval:
+		return StateDown
+	case lag > degradedLagIntervals*interval || h.ConsecutiveFailures > 0:
+		return StateDegraded
+	}
+	return StateOK
+}
+
+// Health returns the current iteration summary.
+func (r *ScopedRunner) Health() SchedulerHealth {
+	r.healthMu.Lock()
+	defer r.healthMu.Unlock()
+	return r.health
+}
+
+// Interval is the pace the scheduler is configured to run at.
+func (r *ScopedRunner) Interval() time.Duration { return r.opts.Interval }
+
+func (r *ScopedRunner) runIteration(ctx context.Context) {
+	start := r.opts.Now()
+	r.healthMu.Lock()
+	r.health.LastStart = start
+	r.healthMu.Unlock()
+	succeeded := r.tick(ctx)
+	if ctx.Err() != nil {
+		// An iteration cut short by shutdown says nothing about the scheduler.
+		return
+	}
+	end := r.opts.Now()
+	r.healthMu.Lock()
+	defer r.healthMu.Unlock()
+	r.health.LastDuration = end.Sub(start)
+	if succeeded {
+		r.health.LastSuccess, r.health.ConsecutiveFailures = end, 0
+	} else {
+		r.health.ConsecutiveFailures++
+	}
 }
 
 func NewScoped(opts ScopedOptions) (*ScopedRunner, error) {
@@ -119,7 +196,7 @@ func (r *ScopedRunner) Run(ctx context.Context) {
 	iteration := func() {
 		sequence++
 		defer r.observeIteration(sequence)
-		r.tick(ctx)
+		r.runIteration(ctx)
 	}
 	iteration()
 	for {
@@ -146,20 +223,20 @@ func (r *ScopedRunner) observeIteration(sequence uint64) {
 	default:
 	}
 }
-func (r *ScopedRunner) tick(parent context.Context) {
+func (r *ScopedRunner) tick(parent context.Context) bool {
 	if parent.Err() != nil {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(parent, r.opts.Timeout)
 	registry, err := r.opts.Auth.Registry(ctx)
 	cancel()
 	if err != nil || !registry.Complete {
 		r.opts.Logger.Printf("scheduler registry unavailable")
-		return
+		return false
 	}
 	if err := registry.Validate(); err != nil {
 		r.opts.Logger.Printf("scheduler registry inconsistent")
-		return
+		return false
 	}
 	for _, t := range registry.Tombstones {
 		r.closeScope(t.RestaurantID)
@@ -174,17 +251,18 @@ func (r *ScopedRunner) tick(parent context.Context) {
 	cancel()
 	if err != nil || status.Service != "warehouse" || !status.Ready || status.Epoch == "" {
 		r.opts.Logger.Printf("scheduler Warehouse unavailable")
-		return
+		return false
 	}
 	for _, e := range registry.Entries {
 		if parent.Err() != nil {
-			return
+			return false
 		}
 		if !schedulerReady(e, status.Epoch, r.opts.GatewayEpoch) {
 			continue
 		}
 		r.due(parent, e.Restaurant, status.Epoch)
 	}
+	return true
 }
 func schedulerReady(e RegistryEntry, epoch, gatewayEpoch string) bool {
 	if e.Restaurant.Lifecycle != "ready" {

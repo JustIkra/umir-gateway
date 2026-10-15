@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Decouple Gateway readiness from the expiration scheduler (critical C01). A `RegistryRefresher` reads the Auth registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default 2s, 1-30s); a failed read keeps the last complete snapshot, which stays current for `GATEWAY_REGISTRY_MAX_AGE` (default 30s, at least three intervals), and the scheduler takes the registry from the refresher. Add `GET /readyz` with `{instance, capabilities: {http, scheduler}}` (`GATEWAY_INSTANCE_ID`, default random UUID), `ScopedRunner.Health()`, scheduler state `ok|degraded|down` that never changes readiness, and switch the Auth-mode image healthcheck to `/readyz`. Private runtime and public contracts are unchanged.
+
 - Resolve registration review #24: bounded peer/preauth admission with repeat recovery, stricter REG1 completion and command-ID schemas, negative contract cases, and one `make sync-contract` target for both REG1 projections.
 
 - Admit REG1 public registration in the strict Auth facade. Validate registration profile/password fields and preserve forwarding, command identity and session cookie behavior.

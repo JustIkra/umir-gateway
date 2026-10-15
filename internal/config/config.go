@@ -36,6 +36,12 @@ type Config struct {
 	// ExpirationRunInterval paces the expiration runs the gateway starts on the warehouse.
 	ExpirationRunInterval time.Duration
 	Operator              Operator
+	// RegistryRefreshInterval paces the Auth registry refresh; RegistryMaxAge bounds how old the last
+	// successful snapshot may be for runtime readiness. Both belong to the Auth mode.
+	RegistryRefreshInterval time.Duration
+	RegistryMaxAge          time.Duration
+	// InstanceID names this replica in /readyz; empty means the process generates one.
+	InstanceID string
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -149,6 +155,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		if err := loadRegistrySettings(&cfg, getenv, value); err != nil {
+			return Config{}, err
+		}
 	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
@@ -156,6 +165,49 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Bounds of the Auth registry refresh. The snapshot must survive a few missed refreshes, so its
+// maximum age is at least registryMinAgeIntervals refresh intervals.
+const (
+	minRegistryRefreshInterval = time.Second
+	maxRegistryRefreshInterval = 30 * time.Second
+	registryMinAgeIntervals    = 3
+	maxInstanceIDLength        = 128
+)
+
+// loadRegistrySettings reads the Auth-mode readiness settings. It never echoes a value.
+func loadRegistrySettings(cfg *Config, getenv func(string) string, value func(key, fallback string) string) error {
+	var err error
+	cfg.RegistryRefreshInterval, err = duration("GATEWAY_REGISTRY_REFRESH_INTERVAL", value("GATEWAY_REGISTRY_REFRESH_INTERVAL", "2s"))
+	if err != nil || cfg.RegistryRefreshInterval < minRegistryRefreshInterval || cfg.RegistryRefreshInterval > maxRegistryRefreshInterval {
+		return errors.New("GATEWAY_REGISTRY_REFRESH_INTERVAL: expected a duration from 1s to 30s")
+	}
+	cfg.RegistryMaxAge, err = duration("GATEWAY_REGISTRY_MAX_AGE", value("GATEWAY_REGISTRY_MAX_AGE", "30s"))
+	if err != nil {
+		return err
+	}
+	if cfg.RegistryMaxAge < registryMinAgeIntervals*cfg.RegistryRefreshInterval {
+		return errors.New("GATEWAY_REGISTRY_MAX_AGE: must be at least three GATEWAY_REGISTRY_REFRESH_INTERVAL periods")
+	}
+	cfg.InstanceID = getenv("GATEWAY_INSTANCE_ID")
+	if cfg.InstanceID != "" && !validInstanceID(cfg.InstanceID) {
+		return errors.New("GATEWAY_INSTANCE_ID: expected 1 to 128 ASCII letters, digits, '.', '_', ':' or '-'")
+	}
+	return nil
+}
+
+func validInstanceID(id string) bool {
+	if len(id) > maxInstanceIDLength {
+		return false
+	}
+	for _, r := range id {
+		letterOrDigit := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !letterOrDigit && !strings.ContainsRune("._:-", r) {
+			return false
+		}
+	}
+	return true
 }
 
 // upstreamURL never echoes the raw value: it may carry credentials.

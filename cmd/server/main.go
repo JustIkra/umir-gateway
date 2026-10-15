@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -72,6 +73,7 @@ type components struct {
 	scopedStreams  *live.Handler
 	streams        *live.Streams
 	expiry         interface{ Run(context.Context) }
+	refresher      interface{ Run(context.Context) }
 }
 
 // newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
@@ -251,9 +253,18 @@ func run(ctx context.Context, server *http.Server, listener net.Listener, grace 
 	return errors.Join(shutdownErr, serveErr)
 }
 
-func healthcheck(port string) (result error) {
+// healthPath is the path the image healthcheck probes: the Auth mode answers capability readiness,
+// the legacy mode only liveness.
+func healthPath(cfg config.Config) string {
+	if cfg.AuthURL != nil {
+		return "/readyz"
+	}
+	return "/healthz"
+}
+
+func healthcheck(port, path string) (result error) {
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	response, err := client.Get("http://127.0.0.1:" + port + path)
 	if err != nil {
 		return err
 	}
@@ -285,7 +296,7 @@ func main() {
 		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
-		if err := healthcheck(cfg.Port); err != nil {
+		if err := healthcheck(cfg.Port, healthPath(cfg)); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -302,13 +313,18 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	// The process owns the expiration runs: they stop with the signal and finish before it exits.
+	// The process owns the background loops, the registry refresher and the expiration runs: they stop
+	// with the signal and finish before it exits.
 	runs := make(chan struct{})
 	go func() {
 		defer close(runs)
-		if app.expiry != nil {
-			app.expiry.Run(signals)
+		var loops sync.WaitGroup
+		for _, loop := range []interface{ Run(context.Context) }{app.refresher, app.expiry} {
+			if loop != nil {
+				loops.Go(func() { loop.Run(signals) })
+			}
 		}
+		loops.Wait()
 	}()
 	if app.privateHandler != nil {
 		privateServer := &http.Server{Addr: net.JoinHostPort(cfg.PrivateListenHost, cfg.PrivatePort), Handler: app.privateHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

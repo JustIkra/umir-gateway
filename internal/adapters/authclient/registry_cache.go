@@ -7,6 +7,12 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/expiration"
 )
 
+// DefaultRegistryMaxAge is how long the last successful complete registry snapshot stays current
+// when the client is given no explicit bound.
+const DefaultRegistryMaxAge = 30 * time.Second
+
+// registryCache keeps the last successful complete registry and when it was observed. A failed or
+// incomplete read never touches it: the snapshot only ages out.
 type registryCache struct {
 	mu                sync.Mutex
 	sequence, applied uint64
@@ -22,18 +28,15 @@ func (r *registryCache) begin() uint64 {
 	return r.sequence
 }
 
-func (r *registryCache) store(sequence uint64, value expiration.Registry, now time.Time, available bool) {
+// store records a successful complete read. An older read finishing after a newer success is dropped.
+func (r *registryCache) store(sequence uint64, value expiration.Registry, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sequence < r.applied {
 		return
 	}
-	r.applied, r.observedAt, r.available = sequence, now, available
-	if available {
-		r.value = copyRegistry(value)
-	} else {
-		r.value = expiration.Registry{}
-	}
+	r.applied, r.observedAt, r.available = sequence, now, true
+	r.value = copyRegistry(value)
 }
 
 func (c *Client) RegistrySnapshot() (expiration.Registry, bool) {
@@ -41,7 +44,7 @@ func (c *Client) RegistrySnapshot() (expiration.Registry, bool) {
 	c.registry.mu.Lock()
 	defer c.registry.mu.Unlock()
 	age := now.Sub(c.registry.observedAt)
-	if !c.registry.available || age < 0 || age >= 5*time.Second {
+	if !c.registry.available || age < 0 || age >= c.maxAge {
 		return expiration.Registry{}, false
 	}
 	return copyRegistry(c.registry.value), true

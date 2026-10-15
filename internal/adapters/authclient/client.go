@@ -26,6 +26,9 @@ type Options struct {
 	Timeout    time.Duration
 	Transport  http.RoundTripper
 	Now        func() time.Time
+	// MaxAge bounds how long the last successful complete registry snapshot stays current; zero means
+	// DefaultRegistryMaxAge.
+	MaxAge time.Duration
 }
 
 type Client struct {
@@ -39,6 +42,7 @@ type Client struct {
 	keysAt           time.Time
 	unknownRefreshed bool
 	registry         registryCache
+	maxAge           time.Duration
 }
 
 func New(opts Options) (*Client, error) {
@@ -47,10 +51,16 @@ func New(opts Options) (*Client, error) {
 		opts.ServiceKey == "" || strings.ContainsAny(opts.ServiceKey, " \t\r\n") || opts.Timeout <= 0 || opts.Transport == nil {
 		return nil, errors.New("authclient: origin URL, transport, credential and positive timeout are required")
 	}
+	if opts.MaxAge < 0 {
+		return nil, errors.New("authclient: registry maximum age must not be negative")
+	}
+	if opts.MaxAge == 0 {
+		opts.MaxAge = DefaultRegistryMaxAge
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Client{target: *opts.URL, key: opts.ServiceKey, timeout: opts.Timeout, transport: opts.Transport, now: opts.Now}, nil
+	return &Client{target: *opts.URL, key: opts.ServiceKey, timeout: opts.Timeout, transport: opts.Transport, now: opts.Now, maxAge: opts.MaxAge}, nil
 }
 
 func (c *Client) CSRF(ctx context.Context, browser operatorhttp.BrowserContext) (operatorhttp.CSRFResult, error) {

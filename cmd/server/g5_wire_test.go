@@ -116,6 +116,7 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	defer peer.Close()
 	cfg := loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin})
 	cfg.ExpirationRunInterval = 20 * time.Millisecond
+	cfg.RegistryRefreshInterval = 20 * time.Millisecond
 	app, err := newComponents(cfg, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +136,10 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); app.expiry.Run(ctx) }()
+	var loops sync.WaitGroup
+	loops.Go(func() { app.refresher.Run(ctx) })
+	loops.Go(func() { app.expiry.Run(ctx) })
+	go func() { defer close(done); loops.Wait() }()
 	defer func() {
 		cancel()
 		select {
@@ -177,9 +181,16 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	await("ready")
 	mu.Lock()
 	mode = "deleted"
+	mu.Unlock()
+	// The scheduler reads the refresher's snapshot, so an iteration that began before the deleted
+	// registry was stored may still dispatch. The refresher is sequential: the third read starts only
+	// after the second one stored its snapshot, and the iterations run every 20 ms.
+	await("deleted")
+	await("deleted")
+	await("deleted")
+	mu.Lock()
 	before := runs
 	mu.Unlock()
-	await("deleted")
 	await("deleted")
 	mu.Lock()
 	defer mu.Unlock()
