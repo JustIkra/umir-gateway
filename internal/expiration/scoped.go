@@ -103,6 +103,7 @@ type ScopedRunner struct {
 	closedScopes map[string]bool
 	healthMu     sync.Mutex
 	health       SchedulerHealth
+	loggedState  string
 }
 
 // SchedulerHealth summarizes the iterations of the scheduler: when the last one started, when one last
@@ -170,13 +171,33 @@ func (r *ScopedRunner) runIteration(ctx context.Context) {
 	}
 	end := r.opts.Now()
 	r.healthMu.Lock()
-	defer r.healthMu.Unlock()
 	r.health.LastDuration = end.Sub(start)
 	if succeeded {
 		r.health.LastSuccess, r.health.ConsecutiveFailures = end, 0
 	} else {
 		r.health.ConsecutiveFailures++
 	}
+	health := r.health
+	r.healthMu.Unlock()
+	r.logStateChange(health, end)
+}
+
+// logStateChange writes one line when the scheduler state differs from the last one logged. Only the
+// iteration goroutine calls it. The line carries times, a duration and a count, never a value.
+func (r *ScopedRunner) logStateChange(h SchedulerHealth, now time.Time) {
+	state := h.State(now, r.opts.Interval)
+	if state == r.loggedState {
+		return
+	}
+	r.loggedState = state
+	r.opts.Logger.Printf("event=scheduler_state state=%s last_start=%s last_success=%s last_duration=%s consecutive_failures=%d", state, formatInstant(h.LastStart), formatInstant(h.LastSuccess), h.LastDuration, h.ConsecutiveFailures)
+}
+
+func formatInstant(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func NewScoped(opts ScopedOptions) (*ScopedRunner, error) {

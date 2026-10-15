@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
@@ -119,7 +118,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 			return components{}, err
 		}
 	}
-	mux.Handle("/readyz", httpapi.NewReadyz(instance, schedulerCapability(expiry, env.now, logger), func() { logger.Printf("readiness response failed") }))
+	mux.Handle("/readyz", httpapi.NewReadyz(instance, schedulerCapability(expiry, env.now), func() { logger.Printf("readiness response failed") }))
 	runtime, err := httpapi.NewGatewayRuntime(httpapi.RuntimeOptions{Auth: client, ServiceKey: cfg.AuthRuntimeServiceKey, Epoch: epoch, TZDataVersion: "go1.26.9", Changes: changes})
 	if err != nil {
 		return components{}, err
@@ -148,28 +147,7 @@ func (a schedulerAuth) Registry(ctx context.Context) (expiration.Registry, error
 	return a.registry.Registry(ctx)
 }
 
-// schedulerCapability reports the scheduler state for readiness and logs each change once with the
-// iteration summary. The log carries times, a duration and a count, never an address or a value.
-func schedulerCapability(runner *expiration.ScopedRunner, now func() time.Time, logger *log.Logger) func() string {
-	var mu sync.Mutex
-	last := ""
-	return func() string {
-		health := runner.Health()
-		state := health.State(now(), runner.Interval())
-		mu.Lock()
-		changed := state != last
-		last = state
-		mu.Unlock()
-		if changed {
-			logger.Printf("event=scheduler_state state=%s last_start=%s last_success=%s last_duration=%s consecutive_failures=%d", state, formatInstant(health.LastStart), formatInstant(health.LastSuccess), health.LastDuration, health.ConsecutiveFailures)
-		}
-		return state
-	}
-}
-
-func formatInstant(t time.Time) string {
-	if t.IsZero() {
-		return "never"
-	}
-	return t.UTC().Format(time.RFC3339)
+// schedulerCapability reads the scheduler state for readiness. The scheduler logs its own changes.
+func schedulerCapability(runner *expiration.ScopedRunner, now func() time.Time) func() string {
+	return func() string { return runner.Health().State(now(), runner.Interval()) }
 }

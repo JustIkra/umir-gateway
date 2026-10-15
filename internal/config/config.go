@@ -192,18 +192,18 @@ func loadRegistrySettings(cfg *Config, getenv func(string) string, value func(ke
 	}
 	cfg.InstanceID = getenv("GATEWAY_INSTANCE_ID")
 	if cfg.InstanceID != "" && !validInstanceID(cfg.InstanceID) {
-		return errors.New("GATEWAY_INSTANCE_ID: expected 1 to 128 ASCII letters, digits, '.', '_', ':' or '-'")
+		return errors.New("GATEWAY_INSTANCE_ID: expected 1 to 128 visible ASCII characters without spaces")
 	}
 	return nil
 }
 
+// validInstanceID accepts 1 to 128 visible ASCII characters: no space, control or non-ASCII byte.
 func validInstanceID(id string) bool {
-	if len(id) > maxInstanceIDLength {
+	if id == "" || len(id) > maxInstanceIDLength {
 		return false
 	}
-	for _, r := range id {
-		letterOrDigit := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
-		if !letterOrDigit && !strings.ContainsRune("._:-", r) {
+	for i := range len(id) {
+		if id[i] < 0x21 || id[i] > 0x7e {
 			return false
 		}
 	}

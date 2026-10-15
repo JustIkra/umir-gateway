@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,5 +140,37 @@ func TestW1RunRecordsHealthForEveryIteration(t *testing.T) {
 	<-done
 	if h := r.Health(); h.LastSuccess.IsZero() || h.LastDuration != time.Second {
 		t.Fatalf("%+v", h)
+	}
+}
+
+func TestW1SchedulerLogsStateChangesOnceAfterIterations(t *testing.T) {
+	now := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	peer := schedulerFixture()
+	r := healthRunner(t, peer, &now, 0)
+	var out strings.Builder
+	r.opts.Logger = log.New(&out, "", 0)
+	lines := func() int { return strings.Count(out.String(), "event=scheduler_state") }
+	r.runIteration(context.Background())
+	r.runIteration(context.Background())
+	if lines() != 1 || !strings.Contains(out.String(), "state=ok") {
+		t.Fatalf("steady state logged %d times: %q", lines(), out.String())
+	}
+	peer.mu.Lock()
+	peer.registry.Complete = false
+	peer.mu.Unlock()
+	r.runIteration(context.Background())
+	r.runIteration(context.Background())
+	if lines() != 2 || !strings.Contains(out.String(), "state=degraded") || !strings.Contains(out.String(), "consecutive_failures=1") {
+		t.Fatalf("failure not logged once: %q", out.String())
+	}
+	peer.mu.Lock()
+	peer.registry = readyRegistry()
+	peer.mu.Unlock()
+	r.runIteration(context.Background())
+	if lines() != 3 || strings.Count(out.String(), "state=ok") != 2 {
+		t.Fatalf("recovery not logged: %q", out.String())
+	}
+	if strings.Contains(out.String(), "synthetic") || strings.Contains(out.String(), tenantA) {
+		t.Fatalf("log carries a value: %q", out.String())
 	}
 }

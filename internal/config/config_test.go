@@ -256,11 +256,13 @@ func TestW1RegistryRefreshRanges(t *testing.T) {
 }
 
 func TestW1InstanceID(t *testing.T) {
-	cfg, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": "gateway-2.eu_1"})))
-	if err != nil || cfg.InstanceID != "gateway-2.eu_1" {
-		t.Fatalf("instance: %q %v", cfg.InstanceID, err)
+	for _, good := range []string{"gateway-2.eu_1", "umir/gateway#2@eu~1", "~", strings.Repeat("a", 128)} {
+		cfg, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": good})))
+		if err != nil || cfg.InstanceID != good {
+			t.Fatalf("instance %q: %q %v", good, cfg.InstanceID, err)
+		}
 	}
-	for _, bad := range []string{"has space", "line\nbreak", strings.Repeat("a", 129), "кириллица"} {
+	for _, bad := range []string{"has space", "line\nbreak", "tab\there", "del\x7f", "nul\x00", strings.Repeat("a", 129), "кириллица"} {
 		if _, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": bad}))); err == nil {
 			t.Fatalf("instance %q accepted", bad)
 		} else if strings.Contains(err.Error(), bad) {

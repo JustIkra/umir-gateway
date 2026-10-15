@@ -579,7 +579,7 @@ docker compose up --build -d --wait
 | `EXPIRATION_RUN_INTERVAL` | `1s`; период запуска проверки сроков на складе, формат Go duration |
 | `GATEWAY_REGISTRY_REFRESH_INTERVAL` | `2s`; период чтения реестра Auth, от 1s до 30s; только режим Auth |
 | `GATEWAY_REGISTRY_MAX_AGE` | `30s`; предельный возраст последнего удачного снимка реестра для готовности, не меньше трёх периодов чтения; только режим Auth |
-| `GATEWAY_INSTANCE_ID` | случайный UUID; имя реплики в `/readyz`, до 128 символов `A-Za-z0-9._:-`; только режим Auth |
+| `GATEWAY_INSTANCE_ID` | случайный UUID; имя реплики в `/readyz`, 1-128 видимых ASCII-символов без пробелов; только режим Auth |
 | `TZ` в контейнере | `Europe/Moscow` |
 | `OPERATOR_*` | см. [настройки личного кабинета](#настройки) |
 
