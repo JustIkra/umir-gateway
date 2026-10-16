@@ -45,7 +45,7 @@ func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error
 }
 
 func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
-	if env.admission.Operator == nil || env.admission.HTTP == nil || env.admission.LivePolicy == nil || env.admission.LiveSlots == nil {
+	if env.admission.Operator == nil || env.admission.HTTP == nil || env.admission.LivePolicy == nil || env.admission.LiveSlots == nil || len(env.admission.CursorKey) < 32 {
 		return components{}, errors.New("gateway: Auth mode requires shared admission storage and SSE slots")
 	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
@@ -81,11 +81,14 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	codec, err := livecursor.New(cfg.AuthServiceKey)
+	codec, err := livecursor.New(string(env.admission.CursorKey))
 	if err != nil {
 		return components{}, err
 	}
-	changes, err := journal.NewScoped(epoch, cfg.LiveRingCapacity, 10000, 4096, time.Now, rand.Text, codec)
+	changes, err := journal.NewScopedWithOptions(journal.ScopedOptions{
+		Epoch: epoch, Capacity: cfg.LiveRingCapacity, MaxScopes: cfg.LiveMaxScopes, MaxClosedScopes: 10000,
+		RingIdle: cfg.LiveRingIdle, TopicsMode: cfg.LiveTopics, Now: env.now, Codec: codec,
+	})
 	if err != nil {
 		return components{}, err
 	}

@@ -4,6 +4,10 @@ allow:
   deepScan: false
   depOnAnyVendor: false
   ignoreNotFoundComponents: true
+excludeFiles:
+  # These isolated test compositions use memredis; production sources remain in the architecture scan.
+  - 'cmd/server/durable_testsetup_test\.go$'
+  - 'internal/operatorhttp/remote_admission_test\.go$'
 components:
   config: {in: "internal/config/**"}
   httpapi: {in: "internal/httpapi/**"}
@@ -56,7 +60,7 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy, config, admission, redisadmission, redislimiter, httpapi, operatorhttp, live]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission, testsupport]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission]
     canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport, admission, redislimiter, rabbitmq, redisadmission]

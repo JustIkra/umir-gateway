@@ -58,8 +58,27 @@ func TestW1ClosedScopesDoNotUseLiveSlots(t *testing.T) {
 			t.Fatalf("append %s after three closures: %v", tenant, err)
 		}
 	}
-	if err := j.Append("G", []string{"stock"}); !errors.Is(err, ErrCapacity) {
-		t.Fatalf("live slots are still bounded: %v", err)
+	if err := j.Append("G", []string{"stock"}); err != nil {
+		t.Fatalf("oldest idle scope should be evicted: %v", err)
+	}
+	if j.scopes["D"] != nil || j.scopes["G"] == nil {
+		t.Fatal("capacity eviction did not remove the oldest idle scope")
+	}
+	var stops []func()
+	for _, tenant := range []string{"E", "F", "G"} {
+		_, stop, err := j.Watch(tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stops = append(stops, stop)
+	}
+	defer func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}()
+	if err := j.Append("H", []string{"stock"}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("active scopes must not be evicted: %v", err)
 	}
 	if err := j.Append("A", []string{"stock"}); err == nil {
 		t.Fatal("a closed scope accepted a change")

@@ -19,6 +19,7 @@ type AdmissionPorts struct {
 	HTTP       httpapi.Admission
 	LivePolicy live.LeasePolicy
 	LiveSlots  live.Slots
+	CursorKey  []byte
 	Close      func() error
 }
 
@@ -44,6 +45,7 @@ func OpenAdmission(ctx context.Context, cfg config.Config, getenv func(string) s
 		return AdmissionPorts{}, errors.Join(err, adapter.Close())
 	}
 	ports := AdaptAdmission(service, adapter.Slots())
+	ports.CursorKey = durable.CursorKey
 	ports.Close = adapter.Close
 	return ports, nil
 }

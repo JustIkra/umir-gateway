@@ -15,13 +15,14 @@ func (leasePolicy) StreamLimits(context.Context, string, string) ([]SlotLimit, e
 }
 
 type leaseSlots struct {
-	mu       sync.Mutex
-	acquires int
-	renews   int
-	releases int
-	grant    SlotGrant
-	err      error
-	renew    bool
+	mu         sync.Mutex
+	acquires   int
+	renews     int
+	releases   int
+	grant      SlotGrant
+	err        error
+	renew      bool
+	renewAfter chan struct{}
 }
 
 func (s *leaseSlots) Acquire(_ context.Context, req SlotRequest) (SlotGrant, error) {
@@ -40,6 +41,14 @@ func (s *leaseSlots) Renew(context.Context, string, time.Duration, ...string) (b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.renews++
+	if s.renewAfter != nil {
+		select {
+		case <-s.renewAfter:
+			return s.renew, s.err
+		default:
+			return true, s.err
+		}
+	}
 	return s.renew, s.err
 }
 func (s *leaseSlots) Release(context.Context, string, ...string) error {
@@ -118,7 +127,7 @@ func TestScopedSSERefusesUnavailableOrFullSharedLease(t *testing.T) {
 func TestScopedSSEClosesWhenSharedLeaseRenewalIsLost(t *testing.T) {
 	f := g4LiveLimits(t, 8, 20, 200)
 	f.handler.opts.Clock = SystemClock{}
-	slots := &leaseSlots{grant: SlotGrant{Granted: true}, renew: false}
+	slots := &leaseSlots{grant: SlotGrant{Granted: true}, renew: false, renewAfter: make(chan struct{})}
 	f.handler.opts.Admission = leasePolicy{}
 	f.handler.opts.Slots = slots
 	f.handler.opts.LeaseTTL = 30 * time.Second
@@ -127,6 +136,7 @@ func TestScopedSSEClosesWhenSharedLeaseRenewalIsLost(t *testing.T) {
 	if r := w1Open(t, f, g4Tenant, "actor"); r.status != 200 {
 		t.Fatalf("stream status %d", r.status)
 	}
+	close(slots.renewAfter)
 	w1WaitFree(t, f)
 	_, renews, releases := slots.counts()
 	if renews == 0 || releases != 1 {

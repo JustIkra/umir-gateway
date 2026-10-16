@@ -208,7 +208,7 @@ func (h *Handler) ServeScope(w http.ResponseWriter, r *http.Request, tenant, ses
 			h.releaseLease(lease)
 		}()
 	}
-	signals, stop, err := h.opts.Journal.Watch(tenant)
+	signals, stop, err := h.opts.Journal.WatchScope(tenant, access.OrgID)
 	if err != nil {
 		scopedFailure(w, 503, "UpstreamUnavailable")
 		return
