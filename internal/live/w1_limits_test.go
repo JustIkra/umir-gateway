@@ -2,6 +2,7 @@ package live
 
 import (
 	"bufio"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,20 +18,38 @@ const (
 	w1TenantA2 = "88888888-8888-4888-8888-888888888888"
 )
 
-func w1Refused(t *testing.T, response *http.Response) {
+// w1Result is what a client sees of an opened stream; the body, if any, stays open for the test.
+type w1Result struct {
+	status int
+	retry  string
+	body   io.Closer
+	reader *bufio.Reader
+}
+
+func w1Refused(t *testing.T, r w1Result) {
 	t.Helper()
-	if response.StatusCode != http.StatusTooManyRequests || response.Header.Get("Retry-After") != "1" {
-		t.Fatalf("refusal: %d Retry-After=%q", response.StatusCode, response.Header.Get("Retry-After"))
+	if r.status != http.StatusTooManyRequests || r.retry != "1" {
+		t.Fatalf("refusal: %d Retry-After=%q", r.status, r.retry)
 	}
 }
 
-func w1Open(t *testing.T, f *g4LiveFixture, tenant, actor string) *http.Response {
+// w1Open opens a stream and, when it is admitted, waits for its first frame.
+func w1Open(t *testing.T, f *g4LiveFixture, tenant, actor string) w1Result {
 	t.Helper()
-	response := g4LiveOpen(t, f, tenant, actor, "")
-	if response.StatusCode == http.StatusOK {
-		g4Event(t, bufio.NewReader(response.Body)) // the stream is admitted once its first frame arrives
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Get(f.server.URL + "/?tenant=" + tenant + "&actor=" + actor)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return response
+	result := w1Result{status: response.StatusCode, retry: response.Header.Get("Retry-After"), body: response.Body, reader: bufio.NewReader(response.Body)}
+	t.Cleanup(func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if result.status == http.StatusOK {
+		g4Event(t, result.reader) // admitted once its first frame arrives
+	}
+	return result
 }
 
 // The three limits are the ones the options carry, not constants of the package.
@@ -38,32 +57,32 @@ func TestW1StreamLimitsComeFromOptions(t *testing.T) {
 	t.Run("per session", func(t *testing.T) {
 		f := g4LiveLimits(t, 3, 100, 100)
 		for i := range 3 {
-			if r := w1Open(t, f, g4Tenant, "actor"); r.StatusCode != http.StatusOK {
-				t.Fatalf("stream %d: %d", i, r.StatusCode)
+			if r := w1Open(t, f, g4Tenant, "actor"); r.status != http.StatusOK {
+				t.Fatalf("stream %d: %d", i, r.status)
 			}
 		}
-		w1Refused(t, g4LiveOpen(t, f, g4Tenant, "actor", ""))
-		if r := w1Open(t, f, g4Tenant, "another"); r.StatusCode != http.StatusOK {
-			t.Fatalf("another session: %d", r.StatusCode)
+		w1Refused(t, w1Open(t, f, g4Tenant, "actor"))
+		if r := w1Open(t, f, g4Tenant, "another"); r.status != http.StatusOK {
+			t.Fatalf("another session: %d", r.status)
 		}
 	})
 	t.Run("total", func(t *testing.T) {
 		f := g4LiveLimits(t, 100, 3, 100)
 		for i := range 3 {
-			if r := w1Open(t, f, g4Tenant, "actor-"+string(rune('a'+i))); r.StatusCode != http.StatusOK {
-				t.Fatalf("stream %d: %d", i, r.StatusCode)
+			if r := w1Open(t, f, g4Tenant, "actor-"+string(rune('a'+i))); r.status != http.StatusOK {
+				t.Fatalf("stream %d: %d", i, r.status)
 			}
 		}
-		w1Refused(t, g4LiveOpen(t, f, g4Tenant, "actor-z", ""))
+		w1Refused(t, w1Open(t, f, g4Tenant, "actor-z"))
 	})
 	t.Run("per organization", func(t *testing.T) {
 		f := g4LiveLimits(t, 100, 100, 3)
 		for i := range 3 {
-			if r := w1Open(t, f, g4Tenant, "actor-"+string(rune('a'+i))); r.StatusCode != http.StatusOK {
-				t.Fatalf("stream %d: %d", i, r.StatusCode)
+			if r := w1Open(t, f, g4Tenant, "actor-"+string(rune('a'+i))); r.status != http.StatusOK {
+				t.Fatalf("stream %d: %d", i, r.status)
 			}
 		}
-		w1Refused(t, g4LiveOpen(t, f, g4Tenant, "actor-z", ""))
+		w1Refused(t, w1Open(t, f, g4Tenant, "actor-z"))
 	})
 	t.Run("invalid", func(t *testing.T) {
 		if _, err := NewHandler(ScopedOptions{PerSession: 1, Total: 1}); err == nil {
@@ -80,13 +99,13 @@ func TestW1OrgCapDoesNotStarveOtherOrganization(t *testing.T) {
 	f.checker.orgs = map[string]string{g4Tenant: w1OrgA, w1TenantA2: w1OrgA, w1TenantB: w1OrgB}
 	f.checker.mu.Unlock()
 	for _, actor := range []string{"a1", "a2"} {
-		if r := w1Open(t, f, g4Tenant, actor); r.StatusCode != http.StatusOK {
-			t.Fatalf("organization A stream %s: %d", actor, r.StatusCode)
+		if r := w1Open(t, f, g4Tenant, actor); r.status != http.StatusOK {
+			t.Fatalf("organization A stream %s: %d", actor, r.status)
 		}
 	}
-	w1Refused(t, g4LiveOpen(t, f, w1TenantA2, "a3", ""))
-	if r := w1Open(t, f, w1TenantB, "b1"); r.StatusCode != http.StatusOK {
-		t.Fatalf("organization B starved by A: %d", r.StatusCode)
+	w1Refused(t, w1Open(t, f, w1TenantA2, "a3"))
+	if r := w1Open(t, f, w1TenantB, "b1"); r.status != http.StatusOK {
+		t.Fatalf("organization B starved by A: %d", r.status)
 	}
 	f.handler.mu.Lock()
 	total, sessions, orgs := f.handler.total, len(f.handler.open), len(f.handler.openOrg)
@@ -122,19 +141,17 @@ func TestW1ReleaseFreesSessionOrgAndTotalOnEveryExit(t *testing.T) {
 	t.Run("client cancel", func(t *testing.T) {
 		f := g4LiveLimits(t, 1, 1, 1)
 		r := w1Open(t, f, g4Tenant, "actor")
-		if err := r.Body.Close(); err != nil {
+		if err := r.body.Close(); err != nil {
 			t.Fatal(err)
 		}
 		w1WaitFree(t, f)
-		if r := w1Open(t, f, g4Tenant, "actor"); r.StatusCode != http.StatusOK {
-			t.Fatalf("reopen after cancel: %d", r.StatusCode)
+		if r := w1Open(t, f, g4Tenant, "actor"); r.status != http.StatusOK {
+			t.Fatalf("reopen after cancel: %d", r.status)
 		}
 	})
 	t.Run("access error ends the stream", func(t *testing.T) {
 		f := g4LiveLimits(t, 1, 1, 1)
-		r := g4LiveOpen(t, f, g4Tenant, "actor", "")
-		reader := bufio.NewReader(r.Body)
-		g4Event(t, reader)
+		reader := w1Open(t, f, g4Tenant, "actor").reader
 		f.checker.deny(&httpapi.ScopeError{Status: 403, Code: "Forbidden"})
 		if err := f.journal.Append(g4Tenant, []string{"stock"}); err != nil {
 			t.Fatal(err)
@@ -147,8 +164,8 @@ func TestW1ReleaseFreesSessionOrgAndTotalOnEveryExit(t *testing.T) {
 	t.Run("refused first check", func(t *testing.T) {
 		f := g4LiveLimits(t, 1, 1, 1)
 		f.checker.deny(&httpapi.ScopeError{Status: 403, Code: "Forbidden"})
-		if r := g4LiveOpen(t, f, g4Tenant, "actor", ""); r.StatusCode != http.StatusForbidden {
-			t.Fatalf("status %d", r.StatusCode)
+		if r := w1Open(t, f, g4Tenant, "actor"); r.status != http.StatusForbidden {
+			t.Fatalf("status %d", r.status)
 		}
 		w1WaitFree(t, f)
 	})
