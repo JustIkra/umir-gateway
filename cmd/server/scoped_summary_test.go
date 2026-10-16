@@ -185,11 +185,14 @@ func w1DecodeSummary(t *testing.T, body string) w1Summary {
 	return result
 }
 
+// One restaurant at a time and four owners that never answer, one after another: each would take the
+// 5 s a restaurant is given, so without the overall deadline the answer would need 20 s. The deadline
+// of 2 s ends the first hang and leaves the rest unavailable without being asked.
 func TestW1SummaryRespectsOverallDeadlineAndKeepsOrder(t *testing.T) {
-	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_DEADLINE": "6s", "GATEWAY_SUMMARY_CONCURRENCY": "6"})
-	slow := map[string]bool{w1Tenant(1): true, w1Tenant(4): true}
+	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_DEADLINE": "2s", "GATEWAY_SUMMARY_CONCURRENCY": "1"})
+	hung := map[string]bool{w1Tenant(1): true, w1Tenant(2): true, w1Tenant(3): true, w1Tenant(4): true}
 	f.peer = w1SummaryPeer(t, func(tenant string, r *http.Request) bool {
-		if slow[tenant] {
+		if hung[tenant] {
 			<-r.Context().Done() // an owner that never answers; released when the Gateway gives up
 			return true
 		}
@@ -197,17 +200,17 @@ func TestW1SummaryRespectsOverallDeadlineAndKeepsOrder(t *testing.T) {
 	})
 	started := time.Now()
 	w := f.request("GET", w1SummaryURL(6), "", nil)
-	if elapsed := time.Since(started); elapsed > 12*time.Second {
-		t.Fatalf("summary took %s past a 6 s deadline", elapsed)
+	if elapsed := time.Since(started); elapsed > 4500*time.Millisecond {
+		t.Fatalf("summary took %s with an overall deadline of 2 s", elapsed)
 	}
 	result := w1DecodeSummary(t, w.Body.String())
 	if w.Code != 200 || result.Status != "partial" || len(result.Restaurants) != 6 {
 		t.Fatalf("summary=%d %s", w.Code, w.Body)
 	}
 	for i, item := range result.Restaurants {
-		want := "ok"
-		if slow[w1Tenant(i)] {
-			want = "unavailable"
+		want := "unavailable"
+		if i == 0 {
+			want = "ok" // served before the first hang; the restaurants after it ran out of time
 		}
 		if item.RestaurantID != w1Tenant(i) || item.Status != want {
 			t.Fatalf("restaurant %d: %+v, want %s in request order", i, item, want)
