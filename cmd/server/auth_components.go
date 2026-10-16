@@ -4,15 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/adapters/livecursor"
-	"github.com/JustIkra/umir-gateway/internal/admission"
+	"github.com/JustIkra/umir-gateway/internal/bootstrap"
 	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/expiration"
@@ -26,13 +28,26 @@ import (
 type componentEnv struct {
 	now       func() time.Time
 	newTicker func(time.Duration) (<-chan time.Time, func())
+	admission bootstrap.AdmissionPorts
 }
 
 func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error) {
-	return newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker})
+	ports, err := bootstrap.OpenAdmission(context.Background(), cfg, os.Getenv)
+	if err != nil {
+		return components{}, err
+	}
+	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: ports})
+	if err != nil {
+		return components{}, errors.Join(err, ports.Close())
+	}
+	app.close = ports.Close
+	return app, nil
 }
 
 func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
+	if env.admission.Operator == nil || env.admission.HTTP == nil || env.admission.LivePolicy == nil || env.admission.LiveSlots == nil || len(env.admission.CursorKey) < 32 {
+		return components{}, errors.New("gateway: Auth mode requires shared admission storage and SSE slots")
+	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
 	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport, Now: env.now, MaxAge: cfg.RegistryMaxAge})
 	if err != nil {
@@ -42,8 +57,15 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	clients := clientaddr.Resolver{Trusted: cfg.TrustedProxies}
-	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clients})
+	var clients clientaddr.Resolver
+	if len(cfg.TrustedProxies) > 0 {
+		clients.Trusted = cfg.TrustedProxies
+	}
+	var clientResolver operatorhttp.ClientResolver
+	if len(cfg.TrustedProxies) > 0 {
+		clientResolver = clients
+	}
+	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clientResolver, Admission: env.admission.Operator})
 	if err != nil {
 		return components{}, err
 	}
@@ -59,19 +81,26 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	codec, err := livecursor.New(cfg.AuthServiceKey)
+	codec, err := livecursor.New(string(env.admission.CursorKey))
 	if err != nil {
 		return components{}, err
 	}
-	changes, err := journal.NewScoped(epoch, cfg.LiveRingCapacity, 10000, 4096, time.Now, rand.Text, codec)
+	changes, err := journal.NewScopedWithOptions(journal.ScopedOptions{
+		Epoch: epoch, Capacity: cfg.LiveRingCapacity, MaxScopes: cfg.LiveMaxScopes, MaxClosedScopes: 10000,
+		RingIdle: cfg.LiveRingIdle, TopicsMode: cfg.LiveTopics, Now: env.now, Codec: codec,
+	})
 	if err != nil {
 		return components{}, err
 	}
-	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
+	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, Admission: env.admission.LivePolicy, Slots: env.admission.LiveSlots, LeaseTTL: 30 * time.Second, LeaseRenewInterval: 10 * time.Second, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
-	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: &admission.TemporaryMemory{PerClient: len(cfg.TrustedProxies) > 0}, Clients: clients, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
+	var scopedClientResolver httpapi.ClientResolver
+	if len(cfg.TrustedProxies) > 0 {
+		scopedClientResolver = clients
+	}
+	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: env.admission.HTTP, Clients: scopedClientResolver, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

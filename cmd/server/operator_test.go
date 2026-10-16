@@ -81,12 +81,39 @@ func gatewayWith(t *testing.T, values map[string]string) http.Handler {
 // assemble builds the gateway's components from settings; the expiration runs are not started.
 func assemble(t *testing.T, values map[string]string) components {
 	t.Helper()
-	app, err := newComponents(loadConfig(t, values), log.Default())
+	cfg := loadConfig(t, values)
+	app, err := componentsForTest(t, cfg, log.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(app.streams.Close)
 	return app
+}
+
+func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (components, error) {
+	t.Helper()
+	var app components
+	var err error
+	if cfg.AuthURL != nil {
+		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: testAdmission(t, cfg)})
+	} else {
+		app, err = newComponents(cfg, logger)
+	}
+	if err == nil {
+		t.Cleanup(func() {
+			if app.streams != nil {
+				app.streams.Close()
+			}
+			if app.scopedStreams != nil {
+				app.scopedStreams.Close()
+			}
+			if app.close != nil {
+				if err := app.close(); err != nil {
+					t.Errorf("close test components: %v", err)
+				}
+			}
+		})
+	}
+	return app, err
 }
 
 func loadConfig(t *testing.T, values map[string]string) config.Config {

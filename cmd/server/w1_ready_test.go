@@ -138,7 +138,8 @@ func newW1Harness(t *testing.T, extra map[string]string) *w1Harness {
 	for key, value := range extra {
 		values[key] = value
 	}
-	app, err := newAuthComponentsWith(loadConfig(t, values), log.New(io.Discard, "", 0), componentEnv{now: h.clock.Now, newTicker: h.tickers.NewTicker})
+	cfg := loadConfig(t, values)
+	app, err := newAuthComponentsWith(cfg, log.New(io.Discard, "", 0), componentEnv{now: h.clock.Now, newTicker: h.tickers.NewTicker, admission: testAdmission(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}

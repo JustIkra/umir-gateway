@@ -76,6 +76,7 @@ type components struct {
 	streams        *live.Streams
 	expiry         interface{ Run(context.Context) }
 	refresher      interface{ Run(context.Context) }
+	close          func() error
 }
 
 // newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
@@ -329,6 +330,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() {
+		if app.close != nil && app.close() != nil {
+			log.Printf("component shutdown failed")
+		}
+	}()
 	server := newServer(cfg, app)
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

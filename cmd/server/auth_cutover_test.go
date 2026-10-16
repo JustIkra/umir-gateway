@@ -34,7 +34,7 @@ func TestAuthCutoverDoesNotOpenLocalAccount(t *testing.T) {
 		"AUTH_URL": auth.URL, "AUTH_SERVICE_KEY": "synthetic-service-key", "AUTH_ISOLATED_TEST_NETWORK": "true", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin,
 		"OPERATOR_STORE_PATH": store, "OPERATOR_BOOTSTRAP_PASSWORD_HASH": "invalid-local-verifier",
 	}
-	app, err := newComponents(loadConfig(t, values), log.New(io.Discard, "", 0))
+	app, err := componentsForTest(t, loadConfig(t, values), log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatalf("Auth cutover consulted local account: %v", err)
 	}

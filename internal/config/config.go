@@ -63,6 +63,17 @@ type Config struct {
 	SummaryDeadline    time.Duration
 	SummaryConcurrency int
 	SummaryMaxBytes    int64
+	// RedisTimeout bounds every Redis command and call; Budgets are the admission budgets by name
+	// (see budgetDefaults); LiveMaxScopes, LiveRingIdle and LiveTopics shape the live rings;
+	// RegistrySyncInterval paces the registry projection and ExpirationBatch is the page size of the
+	// scheduler's list of due restaurants (Auth mode).
+	RedisTimeout         time.Duration
+	Budgets              map[string]Budget
+	LiveMaxScopes        int
+	LiveRingIdle         time.Duration
+	LiveTopics           string
+	RegistrySyncInterval time.Duration
+	ExpirationBatch      int
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -164,19 +175,22 @@ func Load(getenv func(string) string) (Config, error) {
 				return Config{}, fmt.Errorf("%s: scoped transport requires an origin and HTTPS outside isolated tests", key)
 			}
 		}
+		// The private listener of the old Auth (runtime and registry routes, R3) exists only when its key is set.
 		if cfg.AuthRuntimeServiceKey, err = serviceKey(getenv, "AUTH_RUNTIME_SERVICE_KEY"); err != nil {
 			return Config{}, err
 		}
-		if cfg.AuthRuntimeServiceKey == "" || strings.ContainsAny(cfg.AuthRuntimeServiceKey, " \t\r\n") || cfg.AuthRuntimeServiceKey == cfg.AuthServiceKey {
-			return Config{}, errors.New("AUTH_RUNTIME_SERVICE_KEY: a separate Auth-to-Gateway transport credential is required")
-		}
-		cfg.PrivateListenHost = value("PRIVATE_LISTEN_HOST", "127.0.0.1")
-		if ip := net.ParseIP(cfg.PrivateListenHost); ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
-			return Config{}, errors.New("PRIVATE_LISTEN_HOST: expected loopback or unspecified IP")
-		}
-		cfg.PrivatePort = value("PRIVATE_PORT", "8086")
-		if n, err := strconv.Atoi(cfg.PrivatePort); err != nil || n < 1 || n > 65535 || cfg.PrivatePort == cfg.Port {
-			return Config{}, errors.New("PRIVATE_PORT: expected a separate TCP port")
+		if cfg.AuthRuntimeServiceKey != "" {
+			if strings.ContainsAny(cfg.AuthRuntimeServiceKey, " \t\r\n") || cfg.AuthRuntimeServiceKey == cfg.AuthServiceKey {
+				return Config{}, errors.New("AUTH_RUNTIME_SERVICE_KEY: a separate Auth-to-Gateway transport credential is required")
+			}
+			cfg.PrivateListenHost = value("PRIVATE_LISTEN_HOST", "127.0.0.1")
+			if ip := net.ParseIP(cfg.PrivateListenHost); ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+				return Config{}, errors.New("PRIVATE_LISTEN_HOST: expected loopback or unspecified IP")
+			}
+			cfg.PrivatePort = value("PRIVATE_PORT", "8086")
+			if n, err := strconv.Atoi(cfg.PrivatePort); err != nil || n < 1 || n > 65535 || cfg.PrivatePort == cfg.Port {
+				return Config{}, errors.New("PRIVATE_PORT: expected a separate TCP port")
+			}
 		}
 		cfg.AuthTimeout, err = duration("AUTH_TIMEOUT", value("AUTH_TIMEOUT", "5s"))
 		if err != nil {
@@ -192,6 +206,9 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 		if err := loadSummary(&cfg, value); err != nil {
+			return Config{}, err
+		}
+		if err := loadDurableTuning(&cfg, value); err != nil {
 			return Config{}, err
 		}
 		if cfg.TrustedProxies, err = loadTrustedProxies(getenv("GATEWAY_TRUSTED_PROXY_CIDRS")); err != nil {
@@ -275,9 +292,9 @@ func loadLive(cfg *Config, value func(key, fallback string) string) error {
 		fallback string
 		target   *int
 	}{
-		"GATEWAY_LIVE_MAX_STREAMS":             {"64", &cfg.LiveMaxStreams},
+		"GATEWAY_LIVE_MAX_STREAMS":             {"1000", &cfg.LiveMaxStreams},
 		"GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": {"8", &cfg.LiveMaxStreamsPerSession},
-		"GATEWAY_LIVE_MAX_STREAMS_PER_ORG":     {"32", &cfg.LiveMaxStreamsPerOrg},
+		"GATEWAY_LIVE_MAX_STREAMS_PER_ORG":     {"200", &cfg.LiveMaxStreamsPerOrg},
 	} {
 		if *setting.target, err = strconv.Atoi(value(key, setting.fallback)); err != nil || *setting.target < 1 || *setting.target > maxLiveStreams {
 			return fmt.Errorf("%s: expected an integer from 1 to %d", key, maxLiveStreams)

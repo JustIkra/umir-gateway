@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Wire Redis admission to CSRF, login, registration, password reset, anonymous feedback, and order routes. Continuity identities are scoped to the owner command context; JSON fingerprints are canonicalized for admission while owner payload bytes stay unchanged. Order admission binds operation, organization, user, and restaurant. Registration/reset bind command IDs to operation and browser preauth/session context.
+- Add cross-replica SSE quotas backed by Redis leases. A stream leases session, organization, and cell capacity after Auth access checks, renews the leases, and closes when renewal is lost.
+- Add bounded owner-event journal application. Warehouse events deduplicate by owner event ID, require contiguous aggregate revisions, and reset replay on revision gaps or generation changes. Auth revocation wakes scoped streams; Auth deletion closes the matching organization-bound scope. Live scopes are bounded and idle rings are evicted. Cursor keys are separate from admission keys.
+- Keep the Redis admission core and adapter ports documented at their consumers. `internal/admission` applies the G1 budgets, stores only HMAC subjects, uses strict limits while limiter markers are lost or foreign (R7, C47), and treats Redis failures as unavailable. `internal/adapters/redisadmission` joins the copied reference adapter to the ports. One contract suite (`internal/admission/contract`) runs on the in-memory test double and on real Redis.
+
+- Add the durable-stack settings of the Auth mode. `config.LoadDurable` reads `GATEWAY_ADMISSION_KEY_FILE` and `GATEWAY_LIVE_CURSOR_KEY_FILE` (files only, at least 32 bytes, different from each other) and `GATEWAY_LIMITER_GENERATION`; `GATEWAY_REDIS_TIMEOUT` (200ms), `GATEWAY_BUDGET_<NAME>=<limit>/<window>` (defaults are the numbers approved at G1, `..._STRICT` for the strict mode), `GATEWAY_LIVE_MAX_SCOPES` (2000), `GATEWAY_LIVE_RING_IDLE` (10m), `GATEWAY_LIVE_TOPICS` (`all` or `event`), `GATEWAY_REGISTRY_SYNC_INTERVAL` (30s) and `GATEWAY_EXPIRATION_BATCH` (500) are optional. The default SSE limits become 8 per session, 200 per organization and 1000 per process (the cell limit of 2000 is a Redis lease). `AUTH_RUNTIME_SERVICE_KEY` and `PRIVATE_*` are optional: without the key the private listener does not start.
+
+- Add `make integration` and a CI job that run the tests tagged `integration` on real RabbitMQ and Redis (`UMIR_TEST_AMQP_URL`, `UMIR_TEST_REDIS_LIMITER_URL`); each test works in its own virtual host and key prefix. The Redis limiter and RabbitMQ adapters are copied from the factory reference (`internal/adapters/redislimiter`, `internal/adapters/rabbitmq`) without changes.
+
 - Refuse options in the command line: `server --typo` no longer starts the server. Only the test child process may carry the Go test runner's `-test.*` flags. The request body deadline uses the injected clock.
 
 - Reserve the organization summary byte budget before a page is read: the owner client now reads at most the reserved bytes of a reply (`BusinessRequest.MaxBytes`), so `GATEWAY_SUMMARY_MAX_BYTES` bounds what the summary holds at once, not only what it keeps.

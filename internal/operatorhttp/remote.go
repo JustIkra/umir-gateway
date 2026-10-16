@@ -22,7 +22,8 @@ type RemoteOptions struct {
 	NewCommandID func() string
 	// Clients tells which client a request comes from, for the limits kept per client; nil means the
 	// peer address.
-	Clients ClientResolver
+	Clients   ClientResolver
+	Admission Admission
 }
 
 // ClientResolver names the client of a request.
@@ -32,8 +33,8 @@ type RemoteAPI struct {
 	boundary     *API
 	auth         AuthClient
 	newCommandID func() string
-	registration *registrationLimits
 	clients      ClientResolver
+	admission    Admission
 }
 
 func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
@@ -49,7 +50,7 @@ func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
 	default:
 		return nil, errors.New("operatorhttp: cookie mode and public origin do not match")
 	}
-	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID, registration: &registrationLimits{}, clients: opts.Clients}, nil
+	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID, clients: opts.Clients, admission: opts.Admission}, nil
 }
 
 func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +98,9 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if path == "/csrf" && !a.admitFacade(w, r, &FacadeOperation{id: "csrf"}, browser, nil) {
+		return
+	}
 	var result any
 	var err error
 	switch path {
@@ -106,6 +110,9 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil && browser.SessionToken != "" && confirmedUnauthenticated(err) {
 			a.boundary.clearCookie(w, a.boundary.cookies.session)
 			browser.SessionToken = ""
+			if browser.PreauthToken == "" && !a.admitCSRFGlobal(w, r) {
+				return
+			}
 			value, err = a.auth.CSRF(r.Context(), browser)
 		}
 		if err == nil {
@@ -128,6 +135,9 @@ func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			input.CommandID = a.newCommandID()
+			if !a.admitFacade(w, r, &FacadeOperation{id: "login"}, browser, nil) {
+				return
+			}
 			var issued SessionIssued
 			issued, err = a.auth.Login(r.Context(), browser, input)
 			if err == nil {

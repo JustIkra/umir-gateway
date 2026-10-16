@@ -4,13 +4,17 @@ allow:
   deepScan: false
   depOnAnyVendor: false
   ignoreNotFoundComponents: true
+excludeFiles:
+  # These isolated test compositions use memredis; production sources remain in the architecture scan.
+  - 'cmd/server/durable_testsetup_test\.go$'
+  - 'internal/operatorhttp/remote_admission_test\.go$'
 components:
   config: {in: "internal/config/**"}
   httpapi: {in: "internal/httpapi/**"}
   upstream: {in: "internal/adapters/httpupstream/**"}
   proxy: {in: "internal/proxy/**"}
   transport: {in: "internal/transport/**"}
-  bootstrap: {in: "bootstrap/**"}
+  bootstrap: {in: "internal/bootstrap/**"}
   process: {in: "cmd/**"}
   testsupport: {in: "tests/testsupport/**"}
   integration: {in: "tests/integration/**"}
@@ -26,6 +30,9 @@ components:
   expiration: {in: "internal/expiration/**"}
   clientaddr: {in: "internal/clientaddr/**"}
   admission: {in: "internal/admission/**"}
+  redislimiter: {in: "internal/adapters/redislimiter/**"}
+  rabbitmq: {in: "internal/adapters/rabbitmq/**"}
+  redisadmission: {in: "internal/adapters/redisadmission/**"}
   fixture-server: {in: "tests/fixtures/server/**"}
   fixture-control: {in: "tests/fixtures/control/**"}
   fixture-catalog: {in: "tests/fixtures/catalog/**"}
@@ -36,6 +43,8 @@ vendors:
   x-text-norm: {in: "golang.org/x/text/unicode/norm"}
   x-crypto-argon2: {in: "golang.org/x/crypto/argon2"}
   x-term: {in: "golang.org/x/term"}
+  go-redis: {in: "github.com/redis/go-redis/v9**"}
+  amqp091: {in: "github.com/rabbitmq/amqp091-go"}
 deps:
   config:
     mayDependOn: [config]
@@ -49,12 +58,13 @@ deps:
   transport:
     mayDependOn: [transport, proxy]
   bootstrap:
-    mayDependOn: [bootstrap, transport, proxy]
+    mayDependOn: [bootstrap, transport, proxy, config, admission, redisadmission, redislimiter, httpapi, operatorhttp, live]
   process:
     mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission]
     canUse: [x-term]
   testsupport:
-    mayDependOn: [testsupport]
+    mayDependOn: [testsupport, admission, redislimiter, rabbitmq, redisadmission]
+    canUse: [go-redis, amqp091]
   integration:
     mayDependOn: [integration, bootstrap, transport, proxy, testsupport, authclient, operatorhttp]
   operator:
@@ -78,6 +88,15 @@ deps:
     mayDependOn: [clientaddr]
   admission:
     mayDependOn: [admission]
+  redislimiter:
+    mayDependOn: [redislimiter]
+    canUse: [go-redis]
+  rabbitmq:
+    mayDependOn: [rabbitmq]
+    canUse: [amqp091]
+  redisadmission:
+    mayDependOn: [redisadmission, admission, redislimiter, testsupport]
+    canUse: [go-redis]
   journal:
     mayDependOn: [journal]
   live:

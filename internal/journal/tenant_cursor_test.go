@@ -141,6 +141,11 @@ func TestG4JournalCapacityAndCursorBounds(t *testing.T) {
 	if err := j.Append("A", []string{"stock"}); err != nil {
 		t.Fatal(err)
 	}
+	_, stop, err := j.Watch("A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
 	if err := j.Append("B", []string{"stock"}); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("scope capacity=%v", err)
 	}
