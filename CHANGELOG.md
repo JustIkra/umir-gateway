@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop `CheckCSRF` from issuing preauth records: a mutating browser request with neither a session nor a preauth cookie is refused with `403 InvalidCsrfToken` (`not_committed`) without calling Auth. The response is unchanged.
+
 - TEMPORARY: limit anonymous feedback (`POST /api/v2/feedback/anonymous`) with a process-local admission in `internal/admission/temporary_memory.go`, applied after schema, Origin and CSRF checks and before Auth is asked for a token: 5 submissions per browser context per 10 minutes, 20 per client per hour (only with `GATEWAY_TRUSTED_PROXY_CIDRS`) and 200 per process per hour; a repeat of an admitted submission is not charged. A refusal is `429 RateLimited` (`not_committed`) with `Retry-After` and `details.retryAfterSeconds`, which `writeFailure` now fills for every failure that carries a retry delay. The file is removed by the wave that introduces the Redis admission for this route and must not be released on its own; the quota is per replica.
 
 - Resolve the client address of registration limits through trusted proxies. The new `internal/clientaddr` package and `GATEWAY_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs, default empty) make Gateway read `X-Forwarded-For` right to left only from a trusted peer and take the first address outside the list; otherwise the client is the peer. IPv6 clients are counted per /64. Without the setting only the key normalization changes (IPv6 per /64); budgets, deduplication and body validation are unchanged.

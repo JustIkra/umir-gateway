@@ -50,6 +50,10 @@ func (c *Client) AnonymousToken(ctx context.Context) (httpapi.ScopeToken, error)
 }
 
 func (c *Client) CheckCSRF(ctx context.Context, session, preauth, token string) error {
+	if session == "" && preauth == "" {
+		// Auth would issue a new preauth record for the empty context only to see the token refused.
+		return &httpapi.ScopeError{Status: 403, Code: "InvalidCsrfToken", Outcome: "not_committed", Message: "invalid CSRF token"}
+	}
 	result, err := c.CSRF(ctx, operatorhttp.BrowserContext{SessionToken: session, PreauthToken: preauth, Activity: "background"})
 	if err != nil {
 		var failure *operatorhttp.AuthFailure
