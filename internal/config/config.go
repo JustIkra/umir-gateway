@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -52,6 +53,9 @@ type Config struct {
 	// LiveMaxStreams, LiveMaxStreamsPerSession and LiveMaxStreamsPerOrg bound the open SSE streams of
 	// the process, of one session and of one organization (Auth mode).
 	LiveMaxStreams, LiveMaxStreamsPerSession, LiveMaxStreamsPerOrg int
+	// TrustedProxies are the networks whose X-Forwarded-For Gateway believes (Auth mode); empty means
+	// no proxy is trusted and the peer address is the client.
+	TrustedProxies []netip.Prefix
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -174,6 +178,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if err := loadLive(&cfg, value); err != nil {
 			return Config{}, err
 		}
+		if cfg.TrustedProxies, err = loadTrustedProxies(getenv("GATEWAY_TRUSTED_PROXY_CIDRS")); err != nil {
+			return Config{}, err
+		}
 	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
@@ -261,6 +268,28 @@ func loadLive(cfg *Config, value func(key, fallback string) string) error {
 		}
 	}
 	return nil
+}
+
+// maxTrustedProxies keeps the list a few lines long: it names the frontend network, not clients.
+const maxTrustedProxies = 64
+
+// loadTrustedProxies parses a comma-separated CIDR list. It never echoes a value.
+func loadTrustedProxies(raw string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var result []netip.Prefix
+	for _, item := range strings.Split(raw, ",") {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(item))
+		if err != nil || prefix.Bits() == 0 {
+			return nil, errors.New("GATEWAY_TRUSTED_PROXY_CIDRS: expected a comma-separated list of CIDR networks narrower than /0")
+		}
+		result = append(result, prefix.Masked())
+	}
+	if len(result) > maxTrustedProxies {
+		return nil, fmt.Errorf("GATEWAY_TRUSTED_PROXY_CIDRS: expected at most %d networks", maxTrustedProxies)
+	}
+	return result, nil
 }
 
 // validInstanceID accepts 1 to 128 visible ASCII characters: no space, control or non-ASCII byte.

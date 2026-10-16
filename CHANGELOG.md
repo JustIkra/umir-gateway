@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Resolve the client address of registration limits through trusted proxies. The new `internal/clientaddr` package and `GATEWAY_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs, default empty) make Gateway read `X-Forwarded-For` right to left only from a trusted peer and take the first address outside the list; otherwise the client is the peer. IPv6 clients are counted per /64. Without the setting only the key normalization changes (IPv6 per /64); budgets, deduplication and body validation are unchanged.
+
 - Make the SSE stream limits configurable and add a per-organization cap: `GATEWAY_LIVE_MAX_STREAMS` (default 64), `GATEWAY_LIVE_MAX_STREAMS_PER_SESSION` (8) and `GATEWAY_LIVE_MAX_STREAMS_PER_ORG` (32, taken after the first access check). A refusal is the same `429 RateLimited` with `Retry-After: 1`; slots are released on every exit. Public and private contracts are unchanged.
 
 - Allocate live replay rings lazily and keep closed restaurants out of live slots. A ring appears with the first change of a restaurant (observing, watching or closing one allocates none), its capacity is `GATEWAY_LIVE_RING_CAPACITY` (default 128, 16-4096; `JOURNAL_CAPACITY` stays for the legacy mode), ring generations come from a process counter, closed restaurants are a compact set outside the live slots, and the private runtime counts up to 10 000 live and 10 000 closed registrations separately. Public and private contracts are unchanged.

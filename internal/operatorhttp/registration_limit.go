@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 )
 
 type registrationAttempt struct {
@@ -88,13 +89,11 @@ func (a *RemoteAPI) admitRegistration(w http.ResponseWriter, r *http.Request, br
 	if r.Method != http.MethodPost || r.URL.Path != "/api/v2/email-challenges" || json.Unmarshal(body, &input) != nil || input.Purpose != "registration" || browser.SessionToken != "" {
 		return true
 	}
-	peer, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		peer = r.RemoteAddr
+	clients := a.clients
+	if clients == nil {
+		clients = clientaddr.Resolver{}
 	}
-	if peer == "" {
-		peer = "unknown"
-	}
+	peer := clients.Client(r)
 	if wait := a.registration.admit(peer, browser.PreauthToken, body, a.boundary.now()); wait > 0 {
 		seconds := max(1, int((wait+time.Second-1)/time.Second))
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))

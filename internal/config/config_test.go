@@ -366,3 +366,20 @@ func TestW1LiveStreamLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestW1TrustedProxyCIDRs(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("default: %v %v", cfg.TrustedProxies, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_TRUSTED_PROXY_CIDRS": "172.20.0.0/16, fd00:1::/48"})))
+	if err != nil || len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[0].String() != "172.20.0.0/16" || cfg.TrustedProxies[1].String() != "fd00:1::/48" {
+		t.Fatalf("list: %v %v", cfg.TrustedProxies, err)
+	}
+	for _, raw := range []string{"not-a-cidr", "172.20.0.0/16,", "0.0.0.0/0", "::/0", "172.20.0.0/33", "172.20.0.1, secret-token"} {
+		_, err := Load(env(authValues(map[string]string{"GATEWAY_TRUSTED_PROXY_CIDRS": raw})))
+		if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "not-a-cidr") {
+			t.Fatalf("value %q: %v", raw, err)
+		}
+	}
+}

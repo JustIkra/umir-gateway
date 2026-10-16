@@ -12,6 +12,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/adapters/livecursor"
+	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/expiration"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
@@ -40,7 +41,8 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text})
+	clients := clientaddr.Resolver{Trusted: cfg.TrustedProxies}
+	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clients})
 	if err != nil {
 		return components{}, err
 	}
