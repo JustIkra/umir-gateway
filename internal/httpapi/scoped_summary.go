@@ -261,10 +261,10 @@ func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session
 		} else {
 			held.giveBack(reserved)
 		}
-		if errors.Is(err, ErrResponseTooLarge) {
+		a.publishChange(r, op, decision, response, err)
+		if errors.Is(err, ErrResponseTooLarge) && reserved < summaryPageBytes {
 			return nil, &ScopeError{Status: 503, Code: "UpstreamUnavailable", Outcome: "unavailable", Message: "summary size budget is exhausted"}
 		}
-		a.publishChange(r, op, decision, response, err)
 		if err != nil {
 			return nil, err
 		}
