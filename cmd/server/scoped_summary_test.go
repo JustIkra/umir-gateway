@@ -151,12 +151,12 @@ func w1SummaryURL(n int) string {
 }
 
 // w1SummaryPeer answers every report for the restaurant in the path; hook runs first and may block.
-func w1SummaryPeer(t *testing.T, hook func(tenant string, r *http.Request)) func(http.ResponseWriter, *http.Request) {
+func w1SummaryPeer(t *testing.T, hook func(tenant string, r *http.Request) (abandon bool)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/internal/warehouse/v2/r/"
 		tenant := strings.SplitN(strings.TrimPrefix(r.URL.Path, prefix), "/", 2)[0]
-		if hook != nil {
-			hook(tenant, r)
+		if hook != nil && hook(tenant, r) {
+			return // the Gateway gave up on this request; there is nobody to answer
 		}
 		kind := "stock"
 		if strings.HasSuffix(r.URL.Path, "movements") {
@@ -188,10 +188,12 @@ func w1DecodeSummary(t *testing.T, body string) w1Summary {
 func TestW1SummaryRespectsOverallDeadlineAndKeepsOrder(t *testing.T) {
 	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_DEADLINE": "6s", "GATEWAY_SUMMARY_CONCURRENCY": "6"})
 	slow := map[string]bool{w1Tenant(1): true, w1Tenant(4): true}
-	f.peer = w1SummaryPeer(t, func(tenant string, r *http.Request) {
+	f.peer = w1SummaryPeer(t, func(tenant string, r *http.Request) bool {
 		if slow[tenant] {
 			<-r.Context().Done() // an owner that never answers; released when the Gateway gives up
+			return true
 		}
+		return false
 	})
 	started := time.Now()
 	w := f.request("GET", w1SummaryURL(6), "", nil)
@@ -220,7 +222,7 @@ func TestW1SummaryBoundsConcurrentOwnerCalls(t *testing.T) {
 	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_CONCURRENCY": "2"})
 	var mu sync.Mutex
 	active, peak := map[string]bool{}, 0
-	f.peer = w1SummaryPeer(t, func(tenant string, _ *http.Request) {
+	f.peer = w1SummaryPeer(t, func(tenant string, _ *http.Request) bool {
 		mu.Lock()
 		active[tenant] = true
 		peak = max(peak, len(active))
@@ -229,6 +231,7 @@ func TestW1SummaryBoundsConcurrentOwnerCalls(t *testing.T) {
 		mu.Lock()
 		delete(active, tenant)
 		mu.Unlock()
+		return false
 	})
 	w := f.request("GET", w1SummaryURL(8), "", nil)
 	if result := w1DecodeSummary(t, w.Body.String()); w.Code != 200 || result.Status != "complete" {
