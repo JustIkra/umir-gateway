@@ -42,6 +42,8 @@ type ScopedOptions struct {
 	Clients   ClientResolver
 	// SummaryDeadline, SummaryConcurrency and SummaryMaxBytes bound one organization summary; zero
 	// values mean the Default* constants.
+	// BodyTimeout bounds reading a request body on every route except the live stream; zero means no bound.
+	BodyTimeout        time.Duration
 	SummaryDeadline    time.Duration
 	SummaryConcurrency int
 	SummaryMaxBytes    int64
@@ -100,7 +102,22 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if op.Owner == "feedback" {
 		limit = 16 << 10
 	}
+	controller := http.NewResponseController(w)
+	if op.id != "live" && a.options.BodyTimeout > 0 {
+		// A stalled sender must not hold the handler open: http.Server.ReadTimeout would also cut SSE.
+		// A writer without deadline support (a test recorder) is simply not bounded.
+		if err := controller.SetReadDeadline(time.Now().Add(a.options.BodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			a.options.Logger.Printf("scoped body deadline failed")
+		}
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	// After a failed read the deadline stays: the server drains the unread body before it answers and
+	// must not wait for a sender that stopped.
+	if err == nil && op.id != "live" && a.options.BodyTimeout > 0 {
+		if clearErr := controller.SetReadDeadline(time.Time{}); clearErr != nil && !errors.Is(clearErr, http.ErrNotSupported) {
+			a.options.Logger.Printf("scoped body deadline reset failed")
+		}
+	}
 	if err != nil {
 		a.writeFailure(w, r, &ScopeError{Status: 400, Code: "InvalidArgument", Message: "request body is unavailable or too large"})
 		return

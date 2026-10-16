@@ -71,7 +71,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: &admission.TemporaryMemory{PerClient: len(cfg.TrustedProxies) > 0}, Clients: clients, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
+	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: &admission.TemporaryMemory{PerClient: len(cfg.TrustedProxies) > 0}, Clients: clients, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

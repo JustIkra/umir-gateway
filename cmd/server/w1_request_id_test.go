@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // lockedBuffer is a log sink the Gateway goroutines may write while the test reads.
@@ -166,5 +171,35 @@ func TestW1OwnersAreAskedForIdentityEncoding(t *testing.T) {
 	defer f.mu.Unlock()
 	if w.Code != http.StatusOK || len(f.requests) != 1 || f.requests[0].Header.Get("Accept-Encoding") != "identity" {
 		t.Fatalf("status %d, owner saw %v", w.Code, f.requests)
+	}
+}
+
+// A sender that stops in the middle of a body is cut after UPSTREAM_TIMEOUT instead of holding the handler.
+func TestW1StalledRequestBodyIsCutAfterUpstreamTimeout(t *testing.T) {
+	f := newScopedFixtureWith(t, map[string]string{"UPSTREAM_TIMEOUT": "300ms"})
+	server := httptest.NewServer(f.handler)
+	t.Cleanup(server.Close)
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Log(err)
+		}
+	})
+	if _, err := fmt.Fprintf(conn, "POST /api/v2/feedback/anonymous HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"sub"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || !strings.Contains(status, " 400 ") {
+		t.Fatalf("status line %q: %v", status, err)
+	}
+	if elapsed := time.Since(started); elapsed < 250*time.Millisecond || elapsed > 4*time.Second {
+		t.Fatalf("stalled body answered after %s, want about the 300ms timeout", elapsed)
 	}
 }
