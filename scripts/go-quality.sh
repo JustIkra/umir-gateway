@@ -66,7 +66,7 @@ architecture() {
   arch="$(tool go-arch-lint "$GO_ARCH_LINT_VERSION")"
   "$arch" --output-color=false check --project-path "$root" --arch-file "$root/.go-arch-lint.yml"
 }
-tests() { go test -race -count=1 ./...; }
+tests() { go test -race -count=1 -timeout=15m ./...; }
 inventory
 case "$action" in
   fmt)

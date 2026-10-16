@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Bound CI: `go test` in `make check` has `-timeout=15m`, both jobs have `timeout-minutes: 30`, and the production `live.Handler` regressions (`TestG4*`, `TestW1*`) are repeated ten times under the race detector next to the legacy `live.Streams` ones.
+
 - Send `Accept-Encoding: identity` to owners on scoped routes, so a future compressing owner cannot turn every reply into 502.
 
 - Add end-to-end request IDs and failure diagnostics. Every external request gets a fresh `X-Request-ID` (a browser-supplied one is ignored), returned in every response including errors and sent to Auth and to the owners; background scheduler runs carry none. Each 502, 503 or 504 caused by Auth or an owner writes one JSON record (`request_id`, `owner`, `operation`, `restaurant_id`, `status`, `class` of `timeout|transport|invalid_response|schema|scope_mismatch|upstream_status`, `duration_ms`) without cause text, addresses, cookies, tokens, bodies or client addresses.
