@@ -6,14 +6,12 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/JustIkra/umir-gateway/internal/admission"
 )
 
 type leasePolicy struct{}
 
-func (leasePolicy) StreamLimits(context.Context, string, string) ([]admission.SlotLimit, error) {
-	return []admission.SlotLimit{{Key: "sse:s:session", Max: 8}, {Key: "sse:o:org", Max: 200}, {Key: "sse:cell", Max: 2000}}, nil
+func (leasePolicy) StreamLimits(context.Context, string, string) ([]SlotLimit, error) {
+	return []SlotLimit{{Key: "sse:s:session", Max: 8}, {Key: "sse:o:org", Max: 200}, {Key: "sse:cell", Max: 2000}}, nil
 }
 
 type leaseSlots struct {
@@ -21,20 +19,20 @@ type leaseSlots struct {
 	acquires int
 	renews   int
 	releases int
-	grant    admission.SlotGrant
+	grant    SlotGrant
 	err      error
 	renew    bool
 }
 
-func (s *leaseSlots) Acquire(_ context.Context, req admission.SlotRequest) (admission.SlotGrant, error) {
+func (s *leaseSlots) Acquire(_ context.Context, req SlotRequest) (SlotGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acquires++
 	if req.TTL != 30*time.Second || len(req.Limits) != 3 || req.Holder == "" {
-		return admission.SlotGrant{}, errors.New("invalid lease request")
+		return SlotGrant{}, errors.New("invalid lease request")
 	}
 	if s.err != nil {
-		return admission.SlotGrant{}, s.err
+		return SlotGrant{}, s.err
 	}
 	return s.grant, nil
 }
@@ -60,7 +58,7 @@ func (s *leaseSlots) counts() (int, int, int) {
 func TestScopedSSEAcquiresSharedLeaseAfterAccessCheck(t *testing.T) {
 	f := g4LiveLimits(t, 8, 20, 200)
 	f.handler.opts.Clock = SystemClock{}
-	slots := &leaseSlots{grant: admission.SlotGrant{Granted: true}, renew: true}
+	slots := &leaseSlots{grant: SlotGrant{Granted: true}, renew: true}
 	f.handler.opts.Admission = leasePolicy{}
 	f.handler.opts.Slots = slots
 	f.handler.opts.LeaseTTL = 30 * time.Second
@@ -93,7 +91,7 @@ func TestScopedSSEAcquiresSharedLeaseAfterAccessCheck(t *testing.T) {
 func TestScopedSSERefusesUnavailableOrFullSharedLease(t *testing.T) {
 	for name, slots := range map[string]*leaseSlots{
 		"unavailable": {err: errors.New("offline")},
-		"full":        {grant: admission.SlotGrant{Denied: 1}},
+		"full":        {grant: SlotGrant{Denied: 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := g4LiveLimits(t, 8, 20, 200)
@@ -120,7 +118,7 @@ func TestScopedSSERefusesUnavailableOrFullSharedLease(t *testing.T) {
 func TestScopedSSEClosesWhenSharedLeaseRenewalIsLost(t *testing.T) {
 	f := g4LiveLimits(t, 8, 20, 200)
 	f.handler.opts.Clock = SystemClock{}
-	slots := &leaseSlots{grant: admission.SlotGrant{Granted: true}, renew: false}
+	slots := &leaseSlots{grant: SlotGrant{Granted: true}, renew: false}
 	f.handler.opts.Admission = leasePolicy{}
 	f.handler.opts.Slots = slots
 	f.handler.opts.LeaseTTL = 30 * time.Second

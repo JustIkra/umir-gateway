@@ -17,6 +17,7 @@ import (
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
 	"github.com/JustIkra/umir-gateway/internal/admission"
+	"github.com/JustIkra/umir-gateway/internal/bootstrap"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/tests/testsupport/memredis"
 )
@@ -96,8 +97,7 @@ func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (com
 	var app components
 	var err error
 	if cfg.AuthURL != nil {
-		service, slots := testAdmission(t, cfg)
-		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service, slots: slots})
+		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: testAdmission(t, cfg)})
 	} else {
 		app, err = newComponents(cfg, logger)
 	}
@@ -110,14 +110,16 @@ func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (com
 				app.scopedStreams.Close()
 			}
 			if app.close != nil {
-				_ = app.close()
+				if err := app.close(); err != nil {
+					t.Errorf("close test components: %v", err)
+				}
 			}
 		})
 	}
 	return app, err
 }
 
-func testAdmission(t *testing.T, cfg config.Config) (*admission.Service, admission.Slots) {
+func testAdmission(t *testing.T, cfg config.Config) bootstrap.AdmissionPorts {
 	t.Helper()
 	store := memredis.New(time.Now())
 	budgets := make(map[string]admission.Budget, len(cfg.Budgets))
@@ -128,7 +130,7 @@ func testAdmission(t *testing.T, cfg config.Config) (*admission.Service, admissi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, store.Slots()
+	return bootstrap.AdaptAdmission(service, store.Slots())
 }
 
 func loadConfig(t *testing.T, values map[string]string) config.Config {

@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/journal"
 	"github.com/JustIkra/umir-gateway/internal/operator"
@@ -22,13 +21,11 @@ type AccessChecker interface {
 }
 
 type ScopedOptions struct {
-	Auth      AccessChecker
-	Journal   *journal.Scoped
-	Clock     Clock
-	Admission interface {
-		StreamLimits(context.Context, string, string) ([]admission.SlotLimit, error)
-	}
-	Slots              admission.Slots
+	Auth               AccessChecker
+	Journal            *journal.Scoped
+	Clock              Clock
+	Admission          LeasePolicy
+	Slots              Slots
 	LeaseTTL           time.Duration
 	LeaseRenewInterval time.Duration
 	NewLeaseID         func() string

@@ -10,7 +10,7 @@ components:
   upstream: {in: "internal/adapters/httpupstream/**"}
   proxy: {in: "internal/proxy/**"}
   transport: {in: "internal/transport/**"}
-  bootstrap: {in: "bootstrap/**"}
+  bootstrap: {in: "internal/bootstrap/**"}
   process: {in: "cmd/**"}
   testsupport: {in: "tests/testsupport/**"}
   integration: {in: "tests/integration/**"}
@@ -54,9 +54,9 @@ deps:
   transport:
     mayDependOn: [transport, proxy]
   bootstrap:
-    mayDependOn: [bootstrap, transport, proxy]
+    mayDependOn: [bootstrap, transport, proxy, config, admission, redisadmission, redislimiter, httpapi, operatorhttp, live]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission, testsupport]
     canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport, admission, redislimiter, rabbitmq, redisadmission]

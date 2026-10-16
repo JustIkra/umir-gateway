@@ -3,26 +3,25 @@ package operatorhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/JustIkra/umir-gateway/internal/admission"
 )
 
 type admissionFailAuth struct{ calls int }
 type recordingAdmission struct {
-	rule     admission.Rule
-	subjects admission.Subjects
-	attempt  admission.Attempt
-	verdict  admission.Verdict
+	rule     AdmissionRule
+	subjects AdmissionSubjects
+	attempt  AdmissionAttempt
+	verdict  AdmissionVerdict
 	err      error
 }
 
-func (a *recordingAdmission) Admit(_ context.Context, rule admission.Rule, subjects admission.Subjects, attempt admission.Attempt) (admission.Verdict, error) {
+func (a *recordingAdmission) Admit(_ context.Context, rule AdmissionRule, subjects AdmissionSubjects, attempt AdmissionAttempt) (AdmissionVerdict, error) {
 	a.rule, a.subjects, a.attempt = rule, subjects, attempt
 	return a.verdict, a.err
 }
@@ -53,8 +52,8 @@ func (a *admissionFailAuth) Public(context.Context, BrowserContext, FacadeReques
 
 type unavailableAdmission struct{}
 
-func (unavailableAdmission) Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error) {
-	return admission.Verdict{}, admission.ErrUnavailable
+func (unavailableAdmission) Admit(context.Context, AdmissionRule, AdmissionSubjects, AdmissionAttempt) (AdmissionVerdict, error) {
+	return AdmissionVerdict{}, errors.New("limiter unavailable")
 }
 
 func TestRemoteCSRFAdmissionFailureFailsClosedBeforeAuth(t *testing.T) {
@@ -75,7 +74,7 @@ func TestRemoteCSRFAdmissionFailureFailsClosedBeforeAuth(t *testing.T) {
 
 func TestRemoteRegistrationAdmissionUsesConfiguredBudgetsBeforeAuth(t *testing.T) {
 	auth := &admissionFailAuth{}
-	limiter := &recordingAdmission{verdict: admission.Verdict{RetryAfter: 7 * time.Second}}
+	limiter := &recordingAdmission{verdict: AdmissionVerdict{RetryAfter: 7 * time.Second}}
 	api, err := NewRemote(RemoteOptions{
 		Auth: auth, Mode: ModeLoopback, PublicOrigin: testOrigin, Logger: log.New(httptest.NewRecorder(), "", 0),
 		Now: time.Now, NewCommandID: func() string { return "command" }, Clients: fixedClient("203.0.113.10"), Admission: limiter,
@@ -93,7 +92,7 @@ func TestRemoteRegistrationAdmissionUsesConfiguredBudgetsBeforeAuth(t *testing.T
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "7" || auth.calls != 0 {
 		t.Fatalf("registration was not refused before Auth: status=%d retry=%q auth_calls=%d body=%s", w.Code, w.Header().Get("Retry-After"), auth.calls, w.Body)
 	}
-	if limiter.rule != admission.RuleRegistration || limiter.subjects != (admission.Subjects{Client: "203.0.113.10", Preauth: "preauth-token", Global: true}) || limiter.attempt.ID != "registration-command" {
+	if limiter.rule != AdmissionRegistration || limiter.subjects != (AdmissionSubjects{Client: "203.0.113.10", Preauth: "preauth-token", Global: true}) || limiter.attempt.ID != "registration-command" {
 		t.Fatalf("wrong admission request: rule=%q subjects=%+v attempt=%+v", limiter.rule, limiter.subjects, limiter.attempt)
 	}
 	var result struct {

@@ -5,40 +5,43 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-
-	"github.com/JustIkra/umir-gateway/internal/admission"
 )
 
 func (a *RemoteAPI) admitFacade(w http.ResponseWriter, r *http.Request, op *FacadeOperation, browser BrowserContext, body []byte) bool {
 	if a.admission == nil {
 		return true
 	}
-	var rule admission.Rule
-	var subjects admission.Subjects
+	var rule AdmissionRule
+	var subjects AdmissionSubjects
 	var input struct {
 		Purpose   string `json:"purpose"`
 		CommandID string `json:"commandID"`
 	}
-	_ = json.Unmarshal(body, &input)
+	if op.id == "beginEmailChallenge" {
+		if err := json.Unmarshal(body, &input); err != nil {
+			a.boundary.problem(w, r, http.StatusBadRequest, "InvalidArgument", "invalid Auth input")
+			return false
+		}
+	}
 	client := ""
 	if a.clients != nil {
 		client = a.clients.Client(r)
 	}
 	switch op.id {
 	case "csrf":
-		rule, subjects = admission.RuleCSRF, admission.Subjects{Client: client, Global: browser.SessionToken == "" && browser.PreauthToken == ""}
+		rule, subjects = AdmissionCSRF, AdmissionSubjects{Client: client, Global: browser.SessionToken == "" && browser.PreauthToken == ""}
 	case "login":
-		rule, subjects = admission.RuleLogin, admission.Subjects{Client: client}
+		rule, subjects = AdmissionLogin, AdmissionSubjects{Client: client}
 	case "beginEmailChallenge":
 		switch input.Purpose {
 		case "registration":
 			if browser.SessionToken != "" {
 				return true
 			}
-			rule = admission.RuleRegistration
-			subjects = admission.Subjects{Client: client, Preauth: browser.PreauthToken, Global: true}
+			rule = AdmissionRegistration
+			subjects = AdmissionSubjects{Client: client, Preauth: browser.PreauthToken, Global: true}
 		case "password_reset":
-			rule, subjects = admission.RuleReset, admission.Subjects{Client: client}
+			rule, subjects = AdmissionReset, AdmissionSubjects{Client: client}
 		default:
 			return true
 		}
@@ -46,16 +49,16 @@ func (a *RemoteAPI) admitFacade(w http.ResponseWriter, r *http.Request, op *Faca
 		return true
 	}
 	attemptID := ""
-	if rule == admission.RuleRegistration || rule == admission.RuleReset {
+	if rule == AdmissionRegistration || rule == AdmissionReset {
 		attemptID = input.CommandID
 	}
-	verdict, err := a.admission.Admit(r.Context(), rule, subjects, admission.Attempt{ID: attemptID, Fingerprint: string(body)})
+	verdict, err := a.admission.Admit(r.Context(), rule, subjects, AdmissionAttempt{ID: attemptID, Fingerprint: string(body)})
 	if err != nil {
 		status, code, outcome := http.StatusServiceUnavailable, "ServiceUnavailable", "not_committed"
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			outcome = "unavailable"
 		}
-		if errors.Is(err, admission.ErrConflict) {
+		if errors.Is(err, ErrAdmissionConflict) {
 			status, code = http.StatusConflict, "CommandConflict"
 			outcome = "not_committed"
 		}
@@ -63,7 +66,7 @@ func (a *RemoteAPI) admitFacade(w http.ResponseWriter, r *http.Request, op *Faca
 		return false
 	}
 	if !verdict.Allowed {
-		a.writeAdmissionFailure(w, r, http.StatusTooManyRequests, "RateLimited", "not_committed", admission.RetryAfterSeconds(verdict.RetryAfter))
+		a.writeAdmissionFailure(w, r, http.StatusTooManyRequests, "RateLimited", "not_committed", retryAfterSeconds(verdict.RetryAfter))
 		return false
 	}
 	return true
@@ -95,13 +98,13 @@ func (a *RemoteAPI) admitCSRFGlobal(w http.ResponseWriter, r *http.Request) bool
 	if a.admission == nil {
 		return true
 	}
-	verdict, err := a.admission.Admit(r.Context(), admission.RuleCSRF, admission.Subjects{Global: true}, admission.Attempt{})
+	verdict, err := a.admission.Admit(r.Context(), AdmissionCSRF, AdmissionSubjects{Global: true}, AdmissionAttempt{})
 	if err != nil {
 		a.writeAdmissionFailure(w, r, http.StatusServiceUnavailable, "ServiceUnavailable", "unavailable", 0)
 		return false
 	}
 	if !verdict.Allowed {
-		a.writeAdmissionFailure(w, r, http.StatusTooManyRequests, "RateLimited", "not_committed", admission.RetryAfterSeconds(verdict.RetryAfter))
+		a.writeAdmissionFailure(w, r, http.StatusTooManyRequests, "RateLimited", "not_committed", retryAfterSeconds(verdict.RetryAfter))
 		return false
 	}
 	return true

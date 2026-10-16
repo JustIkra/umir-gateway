@@ -17,8 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/JustIkra/umir-gateway/internal/admission"
 )
 
 type ScopedLive interface {
@@ -34,10 +32,8 @@ type ScopedChanges interface {
 type ClientResolver interface{ Client(*http.Request) string }
 
 type ScopedOptions struct {
-	Admission interface {
-		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
-	}
-	Clients ClientResolver
+	Admission Admission
+	Clients   ClientResolver
 	// SummaryDeadline, SummaryConcurrency and SummaryMaxBytes bound one organization summary; zero
 	// values mean the Default* constants.
 	// BodyTimeout bounds reading a request body on every route except the live stream; zero means no bound.
@@ -524,7 +520,7 @@ func (a *ScopedAPI) admitFeedback(r *http.Request, session, preauth string, body
 	}
 	sum := sha256.Sum256(append(append([]byte(preauth), 0), body...))
 	fingerprint := hex.EncodeToString(sum[:])
-	return a.admit(r, admission.RuleFeedback, admission.Subjects{Preauth: preauth, Client: client, Global: true}, admission.Attempt{ID: fingerprint, Fingerprint: fingerprint})
+	return a.admit(r, AdmissionFeedback, AdmissionSubjects{Preauth: preauth, Client: client, Global: true}, AdmissionAttempt{ID: fingerprint, Fingerprint: fingerprint})
 }
 
 func (a *ScopedAPI) admitOrder(r *http.Request, op *scopeOperation, restaurant string, decision AuthorizationResult, body []byte) *ScopeError {
@@ -538,14 +534,16 @@ func (a *ScopedAPI) admitOrder(r *http.Request, op *scopeOperation, restaurant s
 	var input struct {
 		CommandID string `json:"commandID"`
 	}
-	_ = json.Unmarshal(body, &input)
+	if err := json.Unmarshal(body, &input); err != nil {
+		return &ScopeError{Status: http.StatusBadRequest, Code: "InvalidArgument", Outcome: "not_committed", Message: "invalid order input", Cause: err}
+	}
 	identity := []byte(strings.Join([]string{"order", op.id, decision.OrgID, decision.UserID, restaurant, input.CommandID}, "\x00"))
 	if input.CommandID == "" {
 		identity = append(identity, 0)
 		identity = append(identity, canonical...)
 	}
 	sum := sha256.Sum256(identity)
-	return a.admit(r, admission.RuleOrder, admission.Subjects{User: decision.UserID, Restaurant: restaurant}, admission.Attempt{ID: hex.EncodeToString(sum[:]), Fingerprint: string(canonical)})
+	return a.admit(r, AdmissionOrder, AdmissionSubjects{User: decision.UserID, Restaurant: restaurant}, AdmissionAttempt{ID: hex.EncodeToString(sum[:]), Fingerprint: string(canonical)})
 }
 
 func canonicalAdmissionJSON(body []byte) ([]byte, error) {
@@ -561,16 +559,16 @@ func canonicalAdmissionJSON(body []byte) ([]byte, error) {
 	return json.Marshal(value)
 }
 
-func (a *ScopedAPI) admit(r *http.Request, rule admission.Rule, subjects admission.Subjects, attempt admission.Attempt) *ScopeError {
+func (a *ScopedAPI) admit(r *http.Request, rule AdmissionRule, subjects AdmissionSubjects, attempt AdmissionAttempt) *ScopeError {
 	verdict, err := a.options.Admission.Admit(r.Context(), rule, subjects, attempt)
 	if err != nil {
-		if errors.Is(err, admission.ErrConflict) {
+		if errors.Is(err, ErrAdmissionConflict) {
 			return &ScopeError{Status: http.StatusConflict, Code: "CommandConflict", Outcome: "not_committed", Message: "command identity conflicts with an earlier request"}
 		}
 		return &ScopeError{Status: http.StatusServiceUnavailable, Code: "ServiceUnavailable", Outcome: "not_committed", Message: "request admission is unavailable", Cause: err}
 	}
 	if !verdict.Allowed {
-		return &ScopeError{Status: http.StatusTooManyRequests, Code: "RateLimited", Outcome: "not_committed", Message: "request limit reached", Retryable: true, RetryAfter: admission.RetryAfterSeconds(verdict.RetryAfter)}
+		return &ScopeError{Status: http.StatusTooManyRequests, Code: "RateLimited", Outcome: "not_committed", Message: "request limit reached", Retryable: true, RetryAfter: retryAfterSeconds(verdict.RetryAfter)}
 	}
 	return nil
 }

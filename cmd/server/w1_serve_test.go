@@ -72,7 +72,9 @@ func TestW2ServeRequiresRedisLimiterURL(t *testing.T) {
 			t.Fatal("serve started without the shared Redis limiter configuration")
 		}
 	case <-time.After(5 * time.Second):
-		_ = child.Process.Signal(syscall.SIGTERM)
+		if err := child.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("stop child after startup timeout: %v", err)
+		}
 		t.Fatal("serve did not refuse to start without Redis limiter settings")
 	}
 }

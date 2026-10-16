@@ -85,8 +85,7 @@ func newW1Register(t *testing.T, gated bool) *w1Register {
 	now := func() time.Time { return start.Add(time.Duration(f.clock.offset.Load())) }
 	values := map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": w1AuthKey, "SERVING_SERVICE_KEY": "w1-serving-key", "WAREHOUSE_SERVICE_KEY": "w1-warehouse-key", "FEEDBACK_SERVICE_KEY": "w1-feedback-key", "AUTH_RUNTIME_SERVICE_KEY": w1RuntimeKey, "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin}
 	cfg := loadConfig(t, values)
-	service, slots := testAdmission(t, cfg)
-	f.app, err = newAuthComponentsWith(cfg, log.New(io.Discard, "", 0), componentEnv{now: now, newTicker: (&w1Tickers{}).NewTicker, admission: service, slots: slots})
+	f.app, err = newAuthComponentsWith(cfg, log.New(io.Discard, "", 0), componentEnv{now: now, newTicker: (&w1Tickers{}).NewTicker, admission: testAdmission(t, cfg)})
 	if err != nil {
 		t.Fatal(err)
 	}

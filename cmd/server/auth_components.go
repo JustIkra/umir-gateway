@@ -14,9 +14,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/adapters/livecursor"
-	"github.com/JustIkra/umir-gateway/internal/adapters/redisadmission"
-	"github.com/JustIkra/umir-gateway/internal/adapters/redislimiter"
-	"github.com/JustIkra/umir-gateway/internal/admission"
+	"github.com/JustIkra/umir-gateway/internal/bootstrap"
 	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/expiration"
@@ -30,45 +28,25 @@ import (
 type componentEnv struct {
 	now       func() time.Time
 	newTicker func(time.Duration) (<-chan time.Time, func())
-	admission interface {
-		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
-		StreamLimits(context.Context, string, string) ([]admission.SlotLimit, error)
-	}
-	slots admission.Slots
+	admission bootstrap.AdmissionPorts
 }
 
 func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error) {
-	redisURL, err := redislimiter.LoadURL(os.Getenv, "GATEWAY", redislimiter.KindLimiter)
+	ports, err := bootstrap.OpenAdmission(context.Background(), cfg, os.Getenv)
 	if err != nil {
 		return components{}, err
 	}
-	durable, err := config.LoadDurable(os.Getenv)
+	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: ports})
 	if err != nil {
-		return components{}, err
+		return components{}, errors.Join(err, ports.Close())
 	}
-	adapter, err := redisadmission.Open(context.Background(), redisadmission.Config{URL: redisURL, Timeout: cfg.RedisTimeout, Generation: durable.LimiterGeneration, StrictWindow: time.Hour, ClientName: "gateway"})
-	if err != nil {
-		return components{}, err
-	}
-	budgets := make(map[string]admission.Budget, len(cfg.Budgets))
-	for name, budget := range cfg.Budgets {
-		budgets[name] = admission.Budget{Limit: budget.Limit, Window: budget.Window, Strict: budget.Strict}
-	}
-	service, err := admission.New(admission.Options{Limiter: adapter.Limiter(), Continuity: adapter.Continuity(), Budgets: budgets, Key: durable.AdmissionKey})
-	if err != nil {
-		return components{}, errors.Join(err, adapter.Close())
-	}
-	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service, slots: adapter.Slots()})
-	if err != nil {
-		return components{}, errors.Join(err, adapter.Close())
-	}
-	app.close = adapter.Close
+	app.close = ports.Close
 	return app, nil
 }
 
 func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
-	if env.admission == nil || env.slots == nil {
-		return components{}, errors.New("Auth mode requires shared admission storage and SSE slots")
+	if env.admission.Operator == nil || env.admission.HTTP == nil || env.admission.LivePolicy == nil || env.admission.LiveSlots == nil {
+		return components{}, errors.New("gateway: Auth mode requires shared admission storage and SSE slots")
 	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
 	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport, Now: env.now, MaxAge: cfg.RegistryMaxAge})
@@ -87,7 +65,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if len(cfg.TrustedProxies) > 0 {
 		clientResolver = clients
 	}
-	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clientResolver, Admission: env.admission})
+	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clientResolver, Admission: env.admission.Operator})
 	if err != nil {
 		return components{}, err
 	}
@@ -111,7 +89,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, Admission: env.admission, Slots: env.slots, LeaseTTL: 30 * time.Second, LeaseRenewInterval: 10 * time.Second, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
+	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, Admission: env.admission.LivePolicy, Slots: env.admission.LiveSlots, LeaseTTL: 30 * time.Second, LeaseRenewInterval: 10 * time.Second, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
@@ -119,7 +97,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if len(cfg.TrustedProxies) > 0 {
 		scopedClientResolver = clients
 	}
-	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: env.admission, Clients: scopedClientResolver, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
+	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: env.admission.HTTP, Clients: scopedClientResolver, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

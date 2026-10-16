@@ -1,7 +1,6 @@
 package operatorhttp
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/strictjson"
 )
@@ -25,9 +23,7 @@ type RemoteOptions struct {
 	// Clients tells which client a request comes from, for the limits kept per client; nil means the
 	// peer address.
 	Clients   ClientResolver
-	Admission interface {
-		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
-	}
+	Admission Admission
 }
 
 // ClientResolver names the client of a request.
@@ -38,9 +34,7 @@ type RemoteAPI struct {
 	auth         AuthClient
 	newCommandID func() string
 	clients      ClientResolver
-	admission    interface {
-		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
-	}
+	admission    Admission
 }
 
 func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
