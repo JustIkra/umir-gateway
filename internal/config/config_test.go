@@ -383,3 +383,26 @@ func TestW1TrustedProxyCIDRs(t *testing.T) {
 		}
 	}
 }
+
+func TestW1SummarySettings(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.SummaryDeadline != 20*time.Second || cfg.SummaryConcurrency != 4 || cfg.SummaryMaxBytes != 64<<20 {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_SUMMARY_DEADLINE": "1s", "GATEWAY_SUMMARY_CONCURRENCY": "32", "GATEWAY_SUMMARY_MAX_BYTES": "1048576"})))
+	if err != nil || cfg.SummaryDeadline != time.Second || cfg.SummaryConcurrency != 32 || cfg.SummaryMaxBytes != 1<<20 {
+		t.Fatalf("bounds: %+v %v", cfg, err)
+	}
+	for key, values := range map[string][]string{
+		"GATEWAY_SUMMARY_DEADLINE":    {"0s", "999ms", "30s", "-1s", "many"},
+		"GATEWAY_SUMMARY_CONCURRENCY": {"0", "33", "-1", "many"},
+		"GATEWAY_SUMMARY_MAX_BYTES":   {"0", "1048575", "1073741825", "many"},
+	} {
+		for _, raw := range values {
+			_, err := Load(env(authValues(map[string]string{key: raw})))
+			if err == nil || strings.Contains(err.Error(), "many") {
+				t.Fatalf("%s=%q: %v", key, raw, err)
+			}
+		}
+	}
+}

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Bound the organization summary: one overall deadline `GATEWAY_SUMMARY_DEADLINE` (default 20s, 1s-29s), `GATEWAY_SUMMARY_CONCURRENCY` (default 4, 1-32) for access checks and reports, and a byte budget `GATEWAY_SUMMARY_MAX_BYTES` (default 64 MiB) for all reports of a request. Restaurants that miss the deadline or the budget are `unavailable` with `UpstreamUnavailable`; the order of restaurants follows the request, any access refusal still fails the whole request before business calls, the result is checked against `OrgSummary`, and `evaluatedAt` is written in Europe/Moscow. The public contract is unchanged.
+
 - Stop `CheckCSRF` from issuing preauth records: a mutating browser request with neither a session nor a preauth cookie is refused with `403 InvalidCsrfToken` (`not_committed`) without calling Auth. The response is unchanged.
 
 - TEMPORARY: limit anonymous feedback (`POST /api/v2/feedback/anonymous`) with a process-local admission in `internal/admission/temporary_memory.go`, applied after schema, Origin and CSRF checks and before Auth is asked for a token: 5 submissions per browser context per 10 minutes, 20 per client per hour (only with `GATEWAY_TRUSTED_PROXY_CIDRS`) and 200 per process per hour; a repeat of an admitted submission is not charged. A refusal is `429 RateLimited` (`not_committed`) with `Retry-After` and `details.retryAfterSeconds`, which `writeFailure` now fills for every failure that carries a retry delay. The file is removed by the wave that introduces the Redis admission for this route and must not be released on its own; the quota is per replica.

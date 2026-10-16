@@ -56,6 +56,11 @@ type Config struct {
 	// TrustedProxies are the networks whose X-Forwarded-For Gateway believes (Auth mode); empty means
 	// no proxy is trusted and the peer address is the client.
 	TrustedProxies []netip.Prefix
+	// SummaryDeadline bounds a whole organization summary, SummaryConcurrency the access checks and
+	// reports it runs at once and SummaryMaxBytes the report bytes it holds (Auth mode).
+	SummaryDeadline    time.Duration
+	SummaryConcurrency int
+	SummaryMaxBytes    int64
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -178,6 +183,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if err := loadLive(&cfg, value); err != nil {
 			return Config{}, err
 		}
+		if err := loadSummary(&cfg, value); err != nil {
+			return Config{}, err
+		}
 		if cfg.TrustedProxies, err = loadTrustedProxies(getenv("GATEWAY_TRUSTED_PROXY_CIDRS")); err != nil {
 			return Config{}, err
 		}
@@ -266,6 +274,33 @@ func loadLive(cfg *Config, value func(key, fallback string) string) error {
 		if *setting.target, err = strconv.Atoi(value(key, setting.fallback)); err != nil || *setting.target < 1 || *setting.target > maxLiveStreams {
 			return fmt.Errorf("%s: expected an integer from 1 to %d", key, maxLiveStreams)
 		}
+	}
+	return nil
+}
+
+// Bounds of the organization summary. The deadline stays under the 30 s proxy read timeout of the frontend.
+const (
+	minSummaryDeadline    = time.Second
+	maxSummaryDeadline    = 29 * time.Second
+	maxSummaryConcurrency = 32
+	minSummaryMaxBytes    = 1 << 20
+	maxSummaryMaxBytes    = 1 << 30
+)
+
+// loadSummary reads the Auth-mode summary settings. It never echoes a value.
+func loadSummary(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.SummaryDeadline, err = duration("GATEWAY_SUMMARY_DEADLINE", value("GATEWAY_SUMMARY_DEADLINE", "20s"))
+	if err != nil || cfg.SummaryDeadline < minSummaryDeadline || cfg.SummaryDeadline > maxSummaryDeadline {
+		return errors.New("GATEWAY_SUMMARY_DEADLINE: expected a duration from 1s to 29s")
+	}
+	cfg.SummaryConcurrency, err = strconv.Atoi(value("GATEWAY_SUMMARY_CONCURRENCY", "4"))
+	if err != nil || cfg.SummaryConcurrency < 1 || cfg.SummaryConcurrency > maxSummaryConcurrency {
+		return fmt.Errorf("GATEWAY_SUMMARY_CONCURRENCY: expected an integer from 1 to %d", maxSummaryConcurrency)
+	}
+	cfg.SummaryMaxBytes, err = strconv.ParseInt(value("GATEWAY_SUMMARY_MAX_BYTES", "67108864"), 10, 64)
+	if err != nil || cfg.SummaryMaxBytes < minSummaryMaxBytes || cfg.SummaryMaxBytes > maxSummaryMaxBytes {
+		return fmt.Errorf("GATEWAY_SUMMARY_MAX_BYTES: expected a byte count from %d to %d", minSummaryMaxBytes, maxSummaryMaxBytes)
 	}
 	return nil
 }

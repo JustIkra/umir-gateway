@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,50 +20,99 @@ type scopeSummaryItem struct {
 	Error        *ScopeError     `json:"error,omitempty"`
 }
 
+// Defaults of the summary limits, used when the options leave them zero; the configuration sets them.
+const (
+	DefaultSummaryDeadline    = 20 * time.Second
+	DefaultSummaryConcurrency = 4
+	DefaultSummaryMaxBytes    = 64 << 20
+)
+
+// summaryPerRestaurant bounds one restaurant's reports inside the overall deadline.
+const summaryPerRestaurant = 5 * time.Second
+
+var moscow = time.FixedZone("Europe/Moscow", 3*60*60)
+
+func (a *ScopedAPI) summaryLimits() (time.Duration, int, int64) {
+	deadline, concurrency, maxBytes := a.options.SummaryDeadline, a.options.SummaryConcurrency, a.options.SummaryMaxBytes
+	if deadline <= 0 {
+		deadline = DefaultSummaryDeadline
+	}
+	if concurrency <= 0 {
+		concurrency = DefaultSummaryConcurrency
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultSummaryMaxBytes
+	}
+	return deadline, concurrency, maxBytes
+}
+
+// byteBudget is the report bytes one summary request may hold in total.
+type byteBudget struct {
+	mu        sync.Mutex
+	remaining int64
+}
+
+// reservation is what one restaurant took from the budget; it is given back when the restaurant fails.
+type reservation struct {
+	budget *byteBudget
+	taken  int64
+}
+
+func (r *reservation) take(n int) bool {
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	if int64(n) > r.budget.remaining {
+		return false
+	}
+	r.budget.remaining -= int64(n)
+	r.taken += int64(n)
+	return true
+}
+
+func (r *reservation) release() {
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	r.budget.remaining += r.taken
+	r.taken = 0
+}
+
+// forEachBounded runs work for every index with at most limit calls at once and waits for all of them.
+func forEachBounded(n, limit int, work func(int)) {
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, limit)
+	for i := range n {
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			work(i)
+		})
+	}
+	wg.Wait()
+}
+
 func (a *ScopedAPI) summary(w http.ResponseWriter, r *http.Request, op *scopeOperation, orgID, session string, query url.Values) {
 	if session == "" {
 		a.writeFailure(w, r, &ScopeError{Status: 401, Code: "Unauthenticated", Message: "a session is required"})
 		return
 	}
-	for _, tenant := range query["restaurantID"] {
-		access, err := a.options.Auth.AccessCheck(r.Context(), AccessCheckRequest{session, tenant, op.id})
-		if err != nil {
-			a.writeFailure(w, r, err)
-			return
-		}
-		if access.OrgID != orgID || access.RestaurantID != tenant || !slices.Contains(access.OrgRoles, "Admin") || !slices.Contains(access.Permissions, "org.summary.read") {
-			a.writeFailure(w, r, &ScopeError{Status: 403, Code: "Forbidden", Message: "summary scopes are not authorized"})
-			return
-		}
+	deadline, concurrency, maxBytes := a.summaryLimits()
+	ctx, cancel := context.WithTimeout(r.Context(), deadline)
+	defer cancel()
+	tenants := query["restaurantID"]
+	if err := a.checkSummaryAccess(ctx, op, orgID, session, tenants, concurrency); err != nil {
+		a.writeFailure(w, r, err)
+		return
 	}
-	items := make([]scopeSummaryItem, 0, len(query["restaurantID"]))
+	items := make([]scopeSummaryItem, len(tenants))
+	budget := &byteBudget{remaining: maxBytes}
+	forEachBounded(len(tenants), concurrency, func(i int) {
+		items[i] = a.summaryItem(ctx, r, session, orgID, tenants[i], query, &reservation{budget: budget})
+	})
 	successes := 0
-	for _, tenant := range query["restaurantID"] {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		stock, err := a.completeReport(ctx, r, session, orgID, tenant, "analyticsstock", query)
-		var movements json.RawMessage
-		if err == nil {
-			movements, err = a.completeReport(ctx, r, session, orgID, tenant, "analyticsmovements", query)
-		}
-		cancel()
-		item := scopeSummaryItem{RestaurantID: tenant, Status: "unavailable"}
-		if err != nil {
-			var failure *ScopeError
-			if !errors.As(err, &failure) {
-				failure = upstreamUnavailable(http.MethodGet, err)
-			}
-			copy := *failure
-			copy.Status = 0
-			copy.Cause = nil
-			copy.Outcome = "unavailable"
-			item.Error = &copy
-		} else {
-			item.Status = "ok"
-			item.Stock = stock
-			item.Movements = movements
+	for _, item := range items {
+		if item.Status == "ok" {
 			successes++
 		}
-		items = append(items, item)
 	}
 	status := "partial"
 	if successes == len(items) {
@@ -75,14 +125,80 @@ func (a *ScopedAPI) summary(w http.ResponseWriter, r *http.Request, op *scopeOpe
 		EvaluatedAt string             `json:"evaluatedAt"`
 		Status      string             `json:"status"`
 		Restaurants []scopeSummaryItem `json:"restaurants"`
-	}{orgID, a.options.Now().Format(time.RFC3339Nano), status, items}
+	}{orgID, a.options.Now().In(moscow).Format(time.RFC3339Nano), status, items}
+	data, err := json.Marshal(result)
+	if err == nil {
+		err = ValidateScopeWire("OrgSummary", data)
+	}
+	if err != nil {
+		a.writeFailure(w, r, upstreamUnavailable(http.MethodGet, err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	if _, err := w.Write(append(data, '\n')); err != nil {
 		a.options.Logger.Printf("summary response write failed")
 	}
 }
 
-func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session, orgID, tenant, operation string, summaryQuery url.Values) (json.RawMessage, error) {
+// checkSummaryAccess authorizes every requested restaurant before any business call. The first failure
+// ends the whole request and cancels the checks still running.
+func (a *ScopedAPI) checkSummaryAccess(ctx context.Context, op *scopeOperation, orgID, session string, tenants []string, concurrency int) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	var first error
+	fail := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if first == nil {
+			first = err
+			cancel()
+		}
+	}
+	forEachBounded(len(tenants), concurrency, func(i int) {
+		if ctx.Err() != nil {
+			return
+		}
+		tenant := tenants[i]
+		access, err := a.options.Auth.AccessCheck(ctx, AccessCheckRequest{session, tenant, op.id})
+		switch {
+		case err != nil:
+			fail(err)
+		case access.OrgID != orgID || access.RestaurantID != tenant || !slices.Contains(access.OrgRoles, "Admin") || !slices.Contains(access.Permissions, "org.summary.read"):
+			fail(&ScopeError{Status: 403, Code: "Forbidden", Message: "summary scopes are not authorized"})
+		}
+	})
+	if first == nil && ctx.Err() != nil {
+		first = authUnavailable(ctx.Err())
+	}
+	return first
+}
+
+// summaryItem reads both reports of one restaurant; any failure makes just this restaurant unavailable.
+func (a *ScopedAPI) summaryItem(ctx context.Context, r *http.Request, session, orgID, tenant string, query url.Values, held *reservation) scopeSummaryItem {
+	ctx, cancel := context.WithTimeout(ctx, summaryPerRestaurant)
+	defer cancel()
+	stock, err := a.completeReport(ctx, r, session, orgID, tenant, "analyticsstock", query, held)
+	var movements json.RawMessage
+	if err == nil {
+		movements, err = a.completeReport(ctx, r, session, orgID, tenant, "analyticsmovements", query, held)
+	}
+	if err == nil {
+		return scopeSummaryItem{RestaurantID: tenant, Status: "ok", Stock: stock, Movements: movements}
+	}
+	held.release()
+	var failure *ScopeError
+	if !errors.As(err, &failure) {
+		failure = upstreamUnavailable(http.MethodGet, err)
+	}
+	copy := *failure
+	copy.Status = 0
+	copy.Cause = nil
+	copy.Outcome = "unavailable"
+	return scopeSummaryItem{RestaurantID: tenant, Status: "unavailable", Error: &copy}
+}
+
+func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session, orgID, tenant, operation string, summaryQuery url.Values, held *reservation) (json.RawMessage, error) {
 	op := a.contract.Operations[operation]
 	query := url.Values{"expectedSettingsVersion": summaryQuery["expectedSettingsVersion"], "limit": []string{"500"}}
 	for _, key := range []string{"riskHours", "fromDate", "throughDate"} {
@@ -132,6 +248,9 @@ func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session
 		bytesUsed += len(response.Body)
 		if bytesUsed > maxReportBytes {
 			return nil, errors.New("complete report exceeds bounded response capacity")
+		}
+		if !held.take(len(response.Body)) {
+			return nil, &ScopeError{Status: 503, Code: "UpstreamUnavailable", Outcome: "unavailable", Message: "summary size budget is exhausted"}
 		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(response.Body, &fields); err != nil {

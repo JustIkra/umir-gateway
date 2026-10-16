@@ -37,16 +37,21 @@ type ClientResolver interface{ Client(*http.Request) string }
 
 type ScopedOptions struct {
 	// Admission and Clients are optional: without Admission anonymous feedback is not limited here.
-	Admission     AnonymousAdmission
-	Clients       ClientResolver
-	Live          ScopedLive
-	Changes       ScopedChanges
-	Auth          ScopedAuth
-	Business      BusinessClient
-	Origin        string
-	SecureCookies bool
-	Now           func() time.Time
-	Logger        *log.Logger
+	Admission AnonymousAdmission
+	Clients   ClientResolver
+	// SummaryDeadline, SummaryConcurrency and SummaryMaxBytes bound one organization summary; zero
+	// values mean the Default* constants.
+	SummaryDeadline    time.Duration
+	SummaryConcurrency int
+	SummaryMaxBytes    int64
+	Live               ScopedLive
+	Changes            ScopedChanges
+	Auth               ScopedAuth
+	Business           BusinessClient
+	Origin             string
+	SecureCookies      bool
+	Now                func() time.Time
+	Logger             *log.Logger
 }
 
 type ScopedAPI struct {
