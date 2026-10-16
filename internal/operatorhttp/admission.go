@@ -1,6 +1,8 @@
 package operatorhttp
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,14 +16,22 @@ func (a *RemoteAPI) admitFacade(w http.ResponseWriter, r *http.Request, op *Faca
 	var rule AdmissionRule
 	var subjects AdmissionSubjects
 	var input struct {
-		Purpose   string `json:"purpose"`
 		CommandID string `json:"commandID"`
+		Email     string `json:"email"`
+		Purpose   string `json:"purpose"`
 	}
+	fingerprint := string(body)
 	if op.id == "beginEmailChallenge" {
 		if err := json.Unmarshal(body, &input); err != nil {
 			a.boundary.problem(w, r, http.StatusBadRequest, "InvalidArgument", "invalid Auth input")
 			return false
 		}
+		canonical, err := json.Marshal(input)
+		if err != nil {
+			a.boundary.problem(w, r, http.StatusBadRequest, "InvalidArgument", "invalid Auth input")
+			return false
+		}
+		fingerprint = string(canonical)
 	}
 	client := ""
 	if a.clients != nil {
@@ -50,9 +60,11 @@ func (a *RemoteAPI) admitFacade(w http.ResponseWriter, r *http.Request, op *Faca
 	}
 	attemptID := ""
 	if rule == AdmissionRegistration || rule == AdmissionReset {
-		attemptID = input.CommandID
+		scope := string(rule) + "\x00" + input.Purpose + "\x00" + browser.PreauthToken + "\x00" + browser.SessionToken + "\x00" + input.CommandID
+		digest := sha256.Sum256([]byte(scope))
+		attemptID = hex.EncodeToString(digest[:])
 	}
-	verdict, err := a.admission.Admit(r.Context(), rule, subjects, AdmissionAttempt{ID: attemptID, Fingerprint: string(body)})
+	verdict, err := a.admission.Admit(r.Context(), rule, subjects, AdmissionAttempt{ID: attemptID, Fingerprint: fingerprint})
 	if err != nil {
 		status, code, outcome := http.StatusServiceUnavailable, "ServiceUnavailable", "not_committed"
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
