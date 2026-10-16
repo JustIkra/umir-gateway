@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/argon2id"
+	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/config"
+	"github.com/JustIkra/umir-gateway/tests/testsupport/memredis"
 )
 
 const (
@@ -81,12 +83,51 @@ func gatewayWith(t *testing.T, values map[string]string) http.Handler {
 // assemble builds the gateway's components from settings; the expiration runs are not started.
 func assemble(t *testing.T, values map[string]string) components {
 	t.Helper()
-	app, err := newComponents(loadConfig(t, values), log.Default())
+	cfg := loadConfig(t, values)
+	app, err := componentsForTest(t, cfg, log.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(app.streams.Close)
 	return app
+}
+
+func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (components, error) {
+	t.Helper()
+	var app components
+	var err error
+	if cfg.AuthURL != nil {
+		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: testAdmission(t, cfg)})
+	} else {
+		app, err = newComponents(cfg, logger)
+	}
+	if err == nil {
+		t.Cleanup(func() {
+			if app.streams != nil {
+				app.streams.Close()
+			}
+			if app.scopedStreams != nil {
+				app.scopedStreams.Close()
+			}
+			if app.close != nil {
+				_ = app.close()
+			}
+		})
+	}
+	return app, err
+}
+
+func testAdmission(t *testing.T, cfg config.Config) *admission.Service {
+	t.Helper()
+	store := memredis.New(time.Now())
+	budgets := make(map[string]admission.Budget, len(cfg.Budgets))
+	for name, budget := range cfg.Budgets {
+		budgets[name] = admission.Budget{Limit: budget.Limit, Window: budget.Window, Strict: budget.Strict}
+	}
+	service, err := admission.New(admission.Options{Limiter: store.Limiter(), Continuity: store.Continuity(), Budgets: budgets, Key: []byte("gateway-test-admission-key-0123456789")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
 func loadConfig(t *testing.T, values map[string]string) config.Config {

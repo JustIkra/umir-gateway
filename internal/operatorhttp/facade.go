@@ -73,13 +73,16 @@ func (a *RemoteAPI) serveFacade(w http.ResponseWriter, r *http.Request) {
 		a.boundary.problem(w, r, 400, "InvalidArgument", "invalid Auth input")
 		return
 	}
-	if !a.admitRegistration(w, r, browser, body) {
+	if !a.admitFacade(w, r, op, browser, body) {
 		return
 	}
 	result, err := a.auth.Public(r.Context(), browser, in)
 	if err != nil && op.id == "csrf" && browser.SessionToken != "" && confirmedUnauthenticated(err) {
 		a.boundary.clearCookie(w, a.boundary.cookies.session)
 		browser.SessionToken = ""
+		if browser.PreauthToken == "" && !a.admitCSRFGlobal(w, r) {
+			return
+		}
 		result, err = a.auth.Public(r.Context(), browser, in)
 	}
 	if err != nil {

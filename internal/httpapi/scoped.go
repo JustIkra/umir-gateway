@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/admission"
 )
 
 type ScopedLive interface {
@@ -26,20 +30,14 @@ type ScopedChanges interface {
 	ObserveRuntime(string, string, string) error
 }
 
-// AnonymousAdmission limits the submissions of anonymous feedback before Auth is asked for a token. It
-// returns how long the caller should wait, zero when the attempt is admitted. A repeat of an admitted
-// submission is not charged again.
-type AnonymousAdmission interface {
-	Admit(preauth, client string, body []byte, now time.Time) time.Duration
-}
-
 // ClientResolver names the client of a request for per-client budgets.
 type ClientResolver interface{ Client(*http.Request) string }
 
 type ScopedOptions struct {
-	// Admission and Clients are optional: without Admission anonymous feedback is not limited here.
-	Admission AnonymousAdmission
-	Clients   ClientResolver
+	Admission interface {
+		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
+	}
+	Clients ClientResolver
 	// SummaryDeadline, SummaryConcurrency and SummaryMaxBytes bound one organization summary; zero
 	// values mean the Default* constants.
 	// BodyTimeout bounds reading a request body on every route except the live stream; zero means no bound.
@@ -184,9 +182,8 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var decision AuthorizationResult
 	var token string
 	if op.id == "anonymousFeedback" {
-		if wait := a.admitAnonymous(r, session, preauth, body); wait > 0 {
-			seconds := max(1, int((wait+time.Second-1)/time.Second))
-			a.writeFailure(w, r, &ScopeError{Status: 429, Code: "RateLimited", Outcome: "not_committed", Message: "too many submissions, try later", Retryable: true, RetryAfter: seconds})
+		if failure := a.admitFeedback(r, session, preauth, body); failure != nil {
+			a.writeFailure(w, r, failure)
 			return
 		}
 		value, err := a.options.Auth.AnonymousToken(r.Context())
@@ -206,6 +203,12 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token = decision.Token
+	}
+	if op.id == "prepareOrder" || op.id == "confirmOrder" {
+		if failure := a.admitOrder(r, id, decision, body); failure != nil {
+			a.writeFailure(w, r, failure)
+			return
+		}
 	}
 	privatePath := privateScopePath(op, id)
 	pathValues, _ := op.pathParameters(r.URL)
@@ -508,10 +511,9 @@ func upstreamUnavailable(method string, cause error) *ScopeError {
 	return &ScopeError{Status: status, Code: "UpstreamUnavailable", Outcome: outcome, Message: "upstream response is unavailable", Cause: cause}
 }
 
-// admitAnonymous asks the admission port about one validated, CSRF-checked submission.
-func (a *ScopedAPI) admitAnonymous(r *http.Request, session, preauth string, body []byte) time.Duration {
+func (a *ScopedAPI) admitFeedback(r *http.Request, session, preauth string, body []byte) *ScopeError {
 	if a.options.Admission == nil {
-		return 0
+		return nil
 	}
 	client := ""
 	if a.options.Clients != nil {
@@ -520,7 +522,39 @@ func (a *ScopedAPI) admitAnonymous(r *http.Request, session, preauth string, bod
 	if preauth == "" {
 		preauth = "session:" + session
 	}
-	return a.options.Admission.Admit(preauth, client, body, a.options.Now())
+	sum := sha256.Sum256(append(append([]byte(preauth), 0), body...))
+	fingerprint := hex.EncodeToString(sum[:])
+	return a.admit(r, admission.RuleFeedback, admission.Subjects{Preauth: preauth, Client: client, Global: true}, admission.Attempt{ID: fingerprint, Fingerprint: fingerprint})
+}
+
+func (a *ScopedAPI) admitOrder(r *http.Request, restaurant string, decision AuthorizationResult, body []byte) *ScopeError {
+	if a.options.Admission == nil {
+		return nil
+	}
+	var input struct {
+		CommandID string `json:"commandID"`
+	}
+	_ = json.Unmarshal(body, &input)
+	attemptID := input.CommandID
+	if attemptID == "" {
+		sum := sha256.Sum256(body)
+		attemptID = hex.EncodeToString(sum[:])
+	}
+	return a.admit(r, admission.RuleOrder, admission.Subjects{User: decision.UserID, Restaurant: restaurant}, admission.Attempt{ID: attemptID, Fingerprint: string(body)})
+}
+
+func (a *ScopedAPI) admit(r *http.Request, rule admission.Rule, subjects admission.Subjects, attempt admission.Attempt) *ScopeError {
+	verdict, err := a.options.Admission.Admit(r.Context(), rule, subjects, attempt)
+	if err != nil {
+		if errors.Is(err, admission.ErrConflict) {
+			return &ScopeError{Status: http.StatusConflict, Code: "CommandConflict", Outcome: "not_committed", Message: "command identity conflicts with an earlier request"}
+		}
+		return &ScopeError{Status: http.StatusServiceUnavailable, Code: "ServiceUnavailable", Outcome: "not_committed", Message: "request admission is unavailable", Cause: err}
+	}
+	if !verdict.Allowed {
+		return &ScopeError{Status: http.StatusTooManyRequests, Code: "RateLimited", Outcome: "not_committed", Message: "request limit reached", Retryable: true, RetryAfter: admission.RetryAfterSeconds(verdict.RetryAfter)}
+	}
+	return nil
 }
 
 func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err error) {

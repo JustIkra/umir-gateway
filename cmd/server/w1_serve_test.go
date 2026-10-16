@@ -50,8 +50,7 @@ func startChild(t *testing.T, args string, environment map[string]string) (*exec
 	return child, exited
 }
 
-// serve starts Gateway in the Auth mode with every service key given as a file, as the durable profile does.
-func TestW1ServeSubcommandStartsServer(t *testing.T) {
+func TestW2ServeRequiresRedisLimiterURL(t *testing.T) {
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer peer.Close()
 	dir := t.TempDir()
@@ -67,17 +66,14 @@ func TestW1ServeSubcommandStartsServer(t *testing.T) {
 	port := freePort(t)
 	maps.Copy(environment, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "PORT": port, "PRIVATE_PORT": freePort(t)})
 	child, exited := startChild(t, "serve", environment)
-	waitChildHealthy(t, "http://127.0.0.1:"+port, exited)
-	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
 	select {
 	case err := <-exited:
-		if err != nil {
-			t.Fatalf("serve did not exit cleanly: %v", err)
+		if err == nil {
+			t.Fatal("serve started without the shared Redis limiter configuration")
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("serve did not stop on SIGTERM")
+		_ = child.Process.Signal(syscall.SIGTERM)
+		t.Fatal("serve did not refuse to start without Redis limiter settings")
 	}
 }
 

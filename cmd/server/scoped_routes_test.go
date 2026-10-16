@@ -125,7 +125,7 @@ func newScopedFixtureLogged(t *testing.T, extra map[string]string, logs io.Write
 	for key, value := range extra {
 		values[key] = value
 	}
-	app, err := newComponents(loadConfig(t, values), log.New(logs, "", 0))
+	app, err := componentsForTest(t, loadConfig(t, values), log.New(logs, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}

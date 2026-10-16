@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/adapters/livecursor"
+	"github.com/JustIkra/umir-gateway/internal/adapters/redisadmission"
+	"github.com/JustIkra/umir-gateway/internal/adapters/redislimiter"
 	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 	"github.com/JustIkra/umir-gateway/internal/config"
@@ -26,13 +30,44 @@ import (
 type componentEnv struct {
 	now       func() time.Time
 	newTicker func(time.Duration) (<-chan time.Time, func())
+	admission interface {
+		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
+	}
 }
 
 func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error) {
-	return newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker})
+	redisURL, err := redislimiter.LoadURL(os.Getenv, "GATEWAY", redislimiter.KindLimiter)
+	if err != nil {
+		return components{}, err
+	}
+	durable, err := config.LoadDurable(os.Getenv)
+	if err != nil {
+		return components{}, err
+	}
+	adapter, err := redisadmission.Open(context.Background(), redisadmission.Config{URL: redisURL, Timeout: cfg.RedisTimeout, Generation: durable.LimiterGeneration, StrictWindow: time.Hour, ClientName: "gateway"})
+	if err != nil {
+		return components{}, err
+	}
+	budgets := make(map[string]admission.Budget, len(cfg.Budgets))
+	for name, budget := range cfg.Budgets {
+		budgets[name] = admission.Budget{Limit: budget.Limit, Window: budget.Window, Strict: budget.Strict}
+	}
+	service, err := admission.New(admission.Options{Limiter: adapter.Limiter(), Continuity: adapter.Continuity(), Budgets: budgets, Key: durable.AdmissionKey})
+	if err != nil {
+		return components{}, errors.Join(err, adapter.Close())
+	}
+	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service})
+	if err != nil {
+		return components{}, errors.Join(err, adapter.Close())
+	}
+	app.close = adapter.Close
+	return app, nil
 }
 
 func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
+	if env.admission == nil {
+		return components{}, errors.New("Auth mode requires shared admission storage")
+	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
 	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport, Now: env.now, MaxAge: cfg.RegistryMaxAge})
 	if err != nil {
@@ -42,8 +77,15 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	clients := clientaddr.Resolver{Trusted: cfg.TrustedProxies}
-	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clients})
+	var clients clientaddr.Resolver
+	if len(cfg.TrustedProxies) > 0 {
+		clients.Trusted = cfg.TrustedProxies
+	}
+	var clientResolver operatorhttp.ClientResolver
+	if len(cfg.TrustedProxies) > 0 {
+		clientResolver = clients
+	}
+	api, err := operatorhttp.NewRemote(operatorhttp.RemoteOptions{Auth: client, Mode: operatorhttp.CookieMode(cfg.Operator.CookieMode), PublicOrigin: cfg.Operator.PublicOrigin, Logger: logger, Now: time.Now, NewCommandID: rand.Text, Clients: clientResolver, Admission: env.admission})
 	if err != nil {
 		return components{}, err
 	}
@@ -71,7 +113,11 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: &admission.TemporaryMemory{PerClient: len(cfg.TrustedProxies) > 0}, Clients: clients, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
+	var scopedClientResolver httpapi.ClientResolver
+	if len(cfg.TrustedProxies) > 0 {
+		scopedClientResolver = clients
+	}
+	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{BodyTimeout: cfg.UpstreamTimeout, SummaryDeadline: cfg.SummaryDeadline, SummaryConcurrency: cfg.SummaryConcurrency, SummaryMaxBytes: cfg.SummaryMaxBytes, Admission: env.admission, Clients: scopedClientResolver, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
