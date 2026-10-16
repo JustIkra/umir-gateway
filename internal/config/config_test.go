@@ -188,10 +188,10 @@ func TestLoadRejectsInvalidSecureOrigins(t *testing.T) {
 
 func TestG5AuthRuntimeCredentialAndPrivatePort(t *testing.T) {
 	values := map[string]string{"AUTH_URL": "http://127.0.0.1:8085", "AUTH_SERVICE_KEY": "gateway-auth-key", "SERVING_URL": "http://127.0.0.1:8083", "WAREHOUSE_URL": "http://127.0.0.1:8082", "FEEDBACK_URL": "http://127.0.0.1:8084", "SERVING_SERVICE_KEY": "s-key", "WAREHOUSE_SERVICE_KEY": "w-key", "FEEDBACK_SERVICE_KEY": "f-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": "http://127.0.0.1:8080"}
-	for _, key := range []string{"", "gateway-auth-key", "has space"} {
+	for _, key := range []string{"gateway-auth-key", "has space"} {
 		values["AUTH_RUNTIME_SERVICE_KEY"] = key
 		if _, err := Load(func(k string) string { return values[k] }); err == nil {
-			t.Fatal("missing/reused/malformed runtime credential accepted")
+			t.Fatal("reused/malformed runtime credential accepted")
 		}
 	}
 	values["AUTH_RUNTIME_SERVICE_KEY"] = "auth-runtime-key"
@@ -352,7 +352,7 @@ func TestW1LiveRingCapacity(t *testing.T) {
 
 func TestW1LiveStreamLimits(t *testing.T) {
 	cfg, err := Load(env(authValues(nil)))
-	if err != nil || cfg.LiveMaxStreams != 64 || cfg.LiveMaxStreamsPerSession != 8 || cfg.LiveMaxStreamsPerOrg != 32 {
+	if err != nil || cfg.LiveMaxStreams != 1000 || cfg.LiveMaxStreamsPerSession != 8 || cfg.LiveMaxStreamsPerOrg != 200 {
 		t.Fatalf("defaults: %+v %v", cfg, err)
 	}
 	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_LIVE_MAX_STREAMS": "200", "GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": "2", "GATEWAY_LIVE_MAX_STREAMS_PER_ORG": "100"})))

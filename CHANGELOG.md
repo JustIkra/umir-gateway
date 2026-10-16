@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add the durable-stack settings of the Auth mode. `config.LoadDurable` reads `GATEWAY_ADMISSION_KEY_FILE` and `GATEWAY_LIVE_CURSOR_KEY_FILE` (files only, at least 32 bytes, different from each other) and `GATEWAY_LIMITER_GENERATION`; `GATEWAY_REDIS_TIMEOUT` (200ms), `GATEWAY_BUDGET_<NAME>=<limit>/<window>` (defaults are the numbers approved at G1, `..._STRICT` for the strict mode), `GATEWAY_LIVE_MAX_SCOPES` (2000), `GATEWAY_LIVE_RING_IDLE` (10m), `GATEWAY_LIVE_TOPICS` (`all` or `event`), `GATEWAY_REGISTRY_SYNC_INTERVAL` (30s) and `GATEWAY_EXPIRATION_BATCH` (500) are optional. The default SSE limits become 8 per session, 200 per organization and 1000 per process (the cell limit of 2000 is a Redis lease). `AUTH_RUNTIME_SERVICE_KEY` and `PRIVATE_*` are optional: without the key the private listener does not start.
+
 - Add `make integration` and a CI job that run the tests tagged `integration` on real RabbitMQ and Redis (`UMIR_TEST_AMQP_URL`, `UMIR_TEST_REDIS_LIMITER_URL`); each test works in its own virtual host and key prefix. The Redis limiter and RabbitMQ adapters are copied from the factory reference (`internal/adapters/redislimiter`, `internal/adapters/rabbitmq`) without changes.
 
 - Refuse options in the command line: `server --typo` no longer starts the server. Only the test child process may carry the Go test runner's `-test.*` flags. The request body deadline uses the injected clock.
