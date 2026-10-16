@@ -42,6 +42,11 @@ type Config struct {
 	RegistryMaxAge          time.Duration
 	// InstanceID names this replica in /readyz; empty means the process generates one.
 	InstanceID string
+	// ExpirationConcurrency bounds the restaurants the scheduler dispatches at once and
+	// ExpirationIterationBudget bounds the time an iteration spends starting dispatches. Both belong to
+	// the Auth mode; the legacy runner has no pool.
+	ExpirationConcurrency     int
+	ExpirationIterationBudget time.Duration
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -158,6 +163,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if err := loadRegistrySettings(&cfg, getenv, value); err != nil {
 			return Config{}, err
 		}
+		if err := loadSchedulerPool(&cfg, value); err != nil {
+			return Config{}, err
+		}
 	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
@@ -193,6 +201,27 @@ func loadRegistrySettings(cfg *Config, getenv func(string) string, value func(ke
 	cfg.InstanceID = getenv("GATEWAY_INSTANCE_ID")
 	if cfg.InstanceID != "" && !validInstanceID(cfg.InstanceID) {
 		return errors.New("GATEWAY_INSTANCE_ID: expected 1 to 128 visible ASCII characters without spaces")
+	}
+	return nil
+}
+
+// Bounds of the scheduler pool.
+const (
+	maxExpirationConcurrency     = 256
+	minExpirationIterationBudget = time.Second
+	maxExpirationIterationBudget = 5 * time.Minute
+)
+
+// loadSchedulerPool reads the Auth-mode scheduler pool settings. It never echoes a value.
+func loadSchedulerPool(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.ExpirationConcurrency, err = strconv.Atoi(value("GATEWAY_EXPIRATION_CONCURRENCY", "8"))
+	if err != nil || cfg.ExpirationConcurrency < 1 || cfg.ExpirationConcurrency > maxExpirationConcurrency {
+		return fmt.Errorf("GATEWAY_EXPIRATION_CONCURRENCY: expected an integer from 1 to %d", maxExpirationConcurrency)
+	}
+	cfg.ExpirationIterationBudget, err = duration("GATEWAY_EXPIRATION_ITERATION_BUDGET", value("GATEWAY_EXPIRATION_ITERATION_BUDGET", "10s"))
+	if err != nil || cfg.ExpirationIterationBudget < minExpirationIterationBudget || cfg.ExpirationIterationBudget > maxExpirationIterationBudget {
+		return errors.New("GATEWAY_EXPIRATION_ITERATION_BUDGET: expected a duration from 1s to 5m")
 	}
 	return nil
 }

@@ -92,18 +92,34 @@ type ScopedOptions struct {
 	NewTicker          func(time.Duration) (<-chan time.Time, func())
 	IterationCompleted chan<- uint64
 	Logger             *log.Logger
+	// Concurrency bounds the restaurants dispatched at once; zero means DefaultConcurrency.
+	Concurrency int
+	// IterationBudget bounds the time an iteration spends starting dispatches; zero means DefaultIterationBudget.
+	IterationBudget time.Duration
 }
 type schedulerState struct {
 	epoch, version string
 	unknown        bool
 }
+
+// Defaults of the dispatch pool when ScopedOptions leaves its bounds zero.
+const (
+	DefaultConcurrency     = 8
+	DefaultIterationBudget = 10 * time.Second
+)
+
 type ScopedRunner struct {
-	opts         ScopedOptions
+	opts ScopedOptions
+	// stateMu guards states and closedScopes: dispatches of one iteration run in parallel.
+	stateMu      sync.Mutex
 	states       map[string]schedulerState
 	closedScopes map[string]bool
 	healthMu     sync.Mutex
 	health       SchedulerHealth
 	loggedState  string
+	// resumeAt is the restaurant the next iteration starts with after a budget-cut iteration. Only the
+	// iteration goroutine reads and writes it.
+	resumeAt string
 }
 
 // SchedulerHealth summarizes the iterations of the scheduler: when the last one started, when one last
@@ -159,6 +175,12 @@ func (r *ScopedRunner) Health() SchedulerHealth {
 // Interval is the pace the scheduler is configured to run at.
 func (r *ScopedRunner) Interval() time.Duration { return r.opts.Interval }
 
+// Concurrency is how many restaurants the scheduler dispatches at once at most.
+func (r *ScopedRunner) Concurrency() int { return r.opts.Concurrency }
+
+// IterationBudget is how long an iteration keeps starting dispatches.
+func (r *ScopedRunner) IterationBudget() time.Duration { return r.opts.IterationBudget }
+
 func (r *ScopedRunner) runIteration(ctx context.Context) {
 	start := r.opts.Now()
 	r.healthMu.Lock()
@@ -203,6 +225,15 @@ func formatInstant(t time.Time) string {
 func NewScoped(opts ScopedOptions) (*ScopedRunner, error) {
 	if opts.Auth == nil || opts.Warehouse == nil || opts.Changes == nil || opts.Interval <= 0 || opts.Timeout <= 0 || opts.Now == nil || opts.NewRunID == nil || opts.NewTicker == nil || opts.Logger == nil {
 		return nil, errors.New("scoped scheduler dependencies and bounds required")
+	}
+	if opts.Concurrency < 0 || opts.IterationBudget < 0 {
+		return nil, errors.New("scoped scheduler concurrency and iteration budget must not be negative")
+	}
+	if opts.Concurrency == 0 {
+		opts.Concurrency = DefaultConcurrency
+	}
+	if opts.IterationBudget == 0 {
+		opts.IterationBudget = DefaultIterationBudget
 	}
 	opts.Timeout = min(opts.Timeout, 5*time.Second)
 	return &ScopedRunner{opts: opts, states: map[string]schedulerState{}, closedScopes: map[string]bool{}}, nil
@@ -274,16 +305,66 @@ func (r *ScopedRunner) tick(parent context.Context) bool {
 		r.opts.Logger.Printf("scheduler Warehouse unavailable")
 		return false
 	}
+	var ready []Restaurant
 	for _, e := range registry.Entries {
-		if parent.Err() != nil {
-			return false
+		if schedulerReady(e, status.Epoch, r.opts.GatewayEpoch) {
+			ready = append(ready, e.Restaurant)
 		}
-		if !schedulerReady(e, status.Epoch, r.opts.GatewayEpoch) {
-			continue
-		}
-		r.due(parent, e.Restaurant, status.Epoch)
 	}
-	return true
+	return r.dispatchAll(parent, ready, status.Epoch)
+}
+
+// dispatchAll runs due for every ready restaurant through a pool of at most Concurrency workers and
+// returns after all of them finished. It stops starting new dispatches once IterationBudget of the
+// injected clock has passed, and the next iteration then resumes with the first restaurant left
+// undone, so a long list never starves its tail. It reports whether every restaurant was reached.
+func (r *ScopedRunner) dispatchAll(ctx context.Context, ready []Restaurant, epoch string) bool {
+	n := len(ready)
+	if n == 0 {
+		r.resumeAt = ""
+		return true
+	}
+	first := 0
+	for i, restaurant := range ready {
+		if restaurant.RestaurantID == r.resumeAt {
+			first = i
+			break
+		}
+	}
+	begun := r.opts.Now()
+	slots := make(chan struct{}, r.opts.Concurrency)
+	var workers sync.WaitGroup
+	reached := 0
+	cut := false
+dispatching:
+	for ; reached < n; reached++ {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break dispatching
+		}
+		// The first restaurant always starts, so every iteration makes progress.
+		if ctx.Err() != nil || reached > 0 && r.opts.Now().Sub(begun) >= r.opts.IterationBudget {
+			<-slots
+			cut = ctx.Err() == nil
+			break
+		}
+		restaurant := ready[(first+reached)%n]
+		workers.Go(func() {
+			defer func() { <-slots }()
+			r.due(ctx, restaurant, epoch)
+		})
+	}
+	workers.Wait()
+	if reached == n {
+		r.resumeAt = ""
+		return ctx.Err() == nil
+	}
+	if cut {
+		r.resumeAt = ready[(first+reached)%n].RestaurantID
+		r.opts.Logger.Printf("scheduler iteration budget exhausted reached=%d total=%d", reached, n)
+	}
+	return false
 }
 func schedulerReady(e RegistryEntry, epoch, gatewayEpoch string) bool {
 	if e.Restaurant.Lifecycle != "ready" {
@@ -312,15 +393,37 @@ func schedulerReady(e RegistryEntry, epoch, gatewayEpoch string) bool {
 	return found && (gatewayEpoch == "" || (seen["gateway"] && seen["serving"]))
 }
 func (r *ScopedRunner) closeScope(id string) {
-	if r.closedScopes[id] {
+	r.stateMu.Lock()
+	closed := r.closedScopes[id]
+	r.stateMu.Unlock()
+	if closed {
 		return
 	}
 	if err := r.opts.Changes.CloseScope(id); err != nil {
 		r.opts.Logger.Printf("scheduler scope close unavailable")
 		return
 	}
+	r.stateMu.Lock()
 	delete(r.states, id)
 	r.closedScopes[id] = true
+	r.stateMu.Unlock()
+}
+
+// loadState returns what is known of a restaurant's last result for epoch.
+func (r *ScopedRunner) loadState(id, epoch string) schedulerState {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	state := r.states[id]
+	if state.epoch != epoch {
+		return schedulerState{epoch: epoch}
+	}
+	return state
+}
+
+func (r *ScopedRunner) storeState(id string, state schedulerState) {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	r.states[id] = state
 }
 func (r *ScopedRunner) due(parent context.Context, restaurant Restaurant, epoch string) {
 	ctx, cancel := context.WithTimeout(parent, r.opts.Timeout)
@@ -339,10 +442,7 @@ func (r *ScopedRunner) due(parent context.Context, restaurant Restaurant, epoch 
 		r.opts.Logger.Printf("scheduler journal unavailable")
 		return
 	}
-	state := r.states[restaurant.RestaurantID]
-	if state.epoch != epoch {
-		state = schedulerState{epoch: epoch}
-	}
+	state := r.loadState(restaurant.RestaurantID, epoch)
 	result, err := r.opts.Warehouse.Due(ctx, DueRequest{RestaurantID: restaurant.RestaurantID, OrgID: restaurant.OrgID, Epoch: epoch, Token: credential.Token, RunID: runID})
 	if err != nil || result.Epoch != epoch || !validVersion(result.Version) || result.FinalWriteoffs != 0 {
 		var failure *DueFailure
@@ -357,7 +457,7 @@ func (r *ScopedRunner) due(parent context.Context, restaurant Restaurant, epoch 
 				r.opts.Logger.Printf("scheduler invalidation unavailable")
 			}
 		}
-		r.states[restaurant.RestaurantID] = state
+		r.storeState(restaurant.RestaurantID, state)
 		r.opts.Logger.Printf("scheduler due result unavailable")
 		return
 	}
@@ -367,7 +467,7 @@ func (r *ScopedRunner) due(parent context.Context, restaurant Restaurant, epoch 
 			return
 		}
 	}
-	r.states[restaurant.RestaurantID] = schedulerState{epoch: epoch, version: result.Version}
+	r.storeState(restaurant.RestaurantID, schedulerState{epoch: epoch, version: result.Version})
 }
 
 func (r Registry) Validate() error {

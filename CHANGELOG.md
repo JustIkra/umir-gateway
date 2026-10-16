@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Bound the expiration scheduler and spare Auth. Restaurants are dispatched through a pool of `GATEWAY_EXPIRATION_CONCURRENCY` (default 8, 1-256) and an iteration stops starting dispatches after `GATEWAY_EXPIRATION_ITERATION_BUDGET` (default 10s, 1s-5m), resuming with the first restaurant left undone; scheduler state is guarded for the parallel pool. Scheduler service tokens are cached per restaurant and Warehouse epoch until ten seconds before expiry. `PUT .../registry` answers from a registry snapshot at most 2s old that holds the restaurant, otherwise one shared read serves concurrent calls, and a 409 or 410 is confirmed by a fresh read. Public and private contracts are unchanged.
+
 - Decouple Gateway readiness from the expiration scheduler (critical C01). A `RegistryRefresher` reads the Auth registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default 2s, 1-30s); a failed read keeps the last complete snapshot, which stays current for `GATEWAY_REGISTRY_MAX_AGE` (default 30s, at least three intervals), and the scheduler takes the registry from the refresher. Add `GET /readyz` with `{instance, capabilities: {http, scheduler}}` (`GATEWAY_INSTANCE_ID`, default random UUID), `ScopedRunner.Health()`, scheduler state `ok|degraded|down` that never changes readiness, and switch the Auth-mode image healthcheck to `/readyz`. Private runtime and public contracts are unchanged.
 
 - Resolve registration review #24: bounded peer/preauth admission with repeat recovery, stricter REG1 completion and command-ID schemas, negative contract cases, and one `make sync-contract` target for both REG1 projections.

@@ -42,6 +42,7 @@ type Client struct {
 	keysAt           time.Time
 	unknownRefreshed bool
 	registry         registryCache
+	tokens           tokenCache
 	maxAge           time.Duration
 }
 

@@ -28,6 +28,9 @@ func (c *Client) ServiceToken(ctx context.Context, input expiration.ServiceReque
 	if input.Operation != "expiry.due" {
 		return expiration.Credential{}, errors.New("scheduler operation forbidden")
 	}
+	if cached, ok := c.tokens.get(input.RestaurantID, input.Epoch, c.now()); ok {
+		return cached, nil
+	}
 	var result expiration.Credential
 	err := c.scopeCall(ctx, "/service-tokens", input, "Token", &result)
 	if err != nil {
@@ -41,5 +44,6 @@ func (c *Client) ServiceToken(ctx context.Context, input expiration.ServiceReque
 	if err != nil || !result.ExpiresAt.Equal(time.Unix(claims.Expires, 0)) {
 		return expiration.Credential{}, scopeUnavailable(errors.New("inconsistent token expiry"))
 	}
+	c.tokens.put(input.RestaurantID, input.Epoch, result, now)
 	return result, nil
 }

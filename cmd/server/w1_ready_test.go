@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/expiration"
 )
 
 const (
@@ -387,5 +389,23 @@ func TestW1InstanceIDDefaultsToARandomUUID(t *testing.T) {
 	_, b, _ := second.readyz()
 	if !uuid.MatchString(a.Instance) || !uuid.MatchString(b.Instance) || a.Instance == b.Instance {
 		t.Fatalf("default instance IDs %q %q", a.Instance, b.Instance)
+	}
+}
+
+func TestW1SchedulerPoolSettingsReachTheRunner(t *testing.T) {
+	runner := func(h *w1Harness) *expiration.ScopedRunner {
+		r, ok := h.app.expiry.(*expiration.ScopedRunner)
+		if !ok {
+			t.Fatalf("scheduler is %T", h.app.expiry)
+		}
+		return r
+	}
+	defaults := runner(newW1Harness(t, nil))
+	if defaults.Concurrency() != 8 || defaults.IterationBudget() != 10*time.Second {
+		t.Fatalf("defaults: %d %s", defaults.Concurrency(), defaults.IterationBudget())
+	}
+	custom := runner(newW1Harness(t, map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "3", "GATEWAY_EXPIRATION_ITERATION_BUDGET": "4s"}))
+	if custom.Concurrency() != 3 || custom.IterationBudget() != 4*time.Second {
+		t.Fatalf("configured: %d %s", custom.Concurrency(), custom.IterationBudget())
 	}
 }

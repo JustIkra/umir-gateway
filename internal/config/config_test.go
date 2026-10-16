@@ -276,3 +276,52 @@ func TestW1RegistrySettingsIgnoredWithoutAuth(t *testing.T) {
 		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
 	}
 }
+
+func TestW1ExpirationPoolDefaults(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExpirationConcurrency != 8 || cfg.ExpirationIterationBudget != 10*time.Second {
+		t.Fatalf("defaults: %d %s", cfg.ExpirationConcurrency, cfg.ExpirationIterationBudget)
+	}
+}
+
+func TestW1ExpirationPoolRanges(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"concurrency zero":          {"GATEWAY_EXPIRATION_CONCURRENCY": "0"},
+		"concurrency negative":      {"GATEWAY_EXPIRATION_CONCURRENCY": "-1"},
+		"concurrency not a number":  {"GATEWAY_EXPIRATION_CONCURRENCY": "many"},
+		"concurrency above limit":   {"GATEWAY_EXPIRATION_CONCURRENCY": "257"},
+		"budget zero":               {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "0s"},
+		"budget negative":           {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "-1s"},
+		"budget not a duration":     {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "long"},
+		"budget below one second":   {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "999ms"},
+		"budget above five minutes": {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "301s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(env(authValues(values)))
+			if err == nil {
+				t.Fatal("invalid scheduler pool settings accepted")
+			}
+			for _, raw := range values {
+				if strings.Contains(err.Error(), raw) {
+					t.Fatal("setting value echoed")
+				}
+			}
+		})
+	}
+	cfg, err := Load(env(authValues(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "256", "GATEWAY_EXPIRATION_ITERATION_BUDGET": "5m"})))
+	if err != nil || cfg.ExpirationConcurrency != 256 || cfg.ExpirationIterationBudget != 5*time.Minute {
+		t.Fatalf("limits rejected: %v", err)
+	}
+	if cfg, err = Load(env(authValues(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "1", "GATEWAY_EXPIRATION_ITERATION_BUDGET": "1s"}))); err != nil || cfg.ExpirationConcurrency != 1 {
+		t.Fatalf("minimum rejected: %v", err)
+	}
+}
+
+func TestW1ExpirationPoolSettingsIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "many"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 )
@@ -113,7 +114,13 @@ func TestG5RuntimeRegisterCloseAndTombstone(t *testing.T) {
 		}
 	}))
 	defer peer.Close()
-	app, err := newComponents(loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin}), log.New(io.Discard, "", 0))
+	// Registration trusts a registry snapshot younger than 2 s, so the test moves an injected clock
+	// (tokens are signed with the real time; the clock starts ahead of it) past that age whenever Auth
+	// changes the registry.
+	var offset atomic.Int64
+	start := time.Now().Add(20 * time.Second)
+	now := func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	app, err := newAuthComponentsWith(loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin}), log.New(io.Discard, "", 0), componentEnv{now: now, newTicker: newTicker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,11 +174,13 @@ func TestG5RuntimeRegisterCloseAndTombstone(t *testing.T) {
 		t.Fatalf("scheduler becomes control authority %d", code)
 	}
 	settingsChanged.Store(true)
+	offset.Add(int64(3 * time.Second))
 	if code := call("PUT", token, runtime.Epoch, id, "1"); code != 409 {
 		t.Fatalf("stale registration settings accepted %d", code)
 	}
 	settingsChanged.Store(false)
 	deleted.Store(true)
+	offset.Add(int64(3 * time.Second))
 	if code := call("PUT", token, runtime.Epoch, id, "1"); code != 410 {
 		t.Fatalf("deleted registry resurrected by retained signed registration %d", code)
 	}

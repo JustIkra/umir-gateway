@@ -580,6 +580,8 @@ docker compose up --build -d --wait
 | `GATEWAY_REGISTRY_REFRESH_INTERVAL` | `2s`; период чтения реестра Auth, от 1s до 30s; только режим Auth |
 | `GATEWAY_REGISTRY_MAX_AGE` | `30s`; предельный возраст последнего удачного снимка реестра для готовности, не меньше трёх периодов чтения; только режим Auth |
 | `GATEWAY_INSTANCE_ID` | случайный UUID; имя реплики в `/readyz`, 1-128 видимых ASCII-символов без пробелов; только режим Auth |
+| `GATEWAY_EXPIRATION_CONCURRENCY` | `8`; сколько ресторанов планировщик проверяет одновременно, от 1 до 256; только режим Auth |
+| `GATEWAY_EXPIRATION_ITERATION_BUDGET` | `10s`; сколько времени итерация планировщика начинает новые проверки, от 1s до 5m; не успевшие рестораны проверяются первыми в следующей итерации; только режим Auth |
 | `TZ` в контейнере | `Europe/Moscow` |
 | `OPERATOR_*` | см. [настройки личного кабинета](#настройки) |
 
@@ -633,7 +635,7 @@ Preserve unrelated local edits, stage reviewed paths and check `git diff --cache
 
 ### Scoped due-expiry scheduler and private runtime (G5)
 
-Private runtime status uses the last successful complete Auth registry snapshot and the local registration table. It performs no synchronous call to Auth. A separate refresher reads the registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default `2s`, 1s to 30s); a failed read keeps the previous snapshot, and a snapshot older than `GATEWAY_REGISTRY_MAX_AGE` (default `30s`, at least three refresh intervals) makes readiness false until the next successful read. The scheduler takes the registry from the refresher instead of reading it, so a slow or stalled scheduler iteration never affects readiness. Registration reads also refresh the snapshot. Later-started reads take precedence over earlier completions, and callers receive independent copies.
+Private runtime status uses the last successful complete Auth registry snapshot and the local registration table. It performs no synchronous call to Auth. A separate refresher reads the registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default `2s`, 1s to 30s); a failed read keeps the previous snapshot, and a snapshot older than `GATEWAY_REGISTRY_MAX_AGE` (default `30s`, at least three refresh intervals) makes readiness false until the next successful read. The scheduler takes the registry from the refresher instead of reading it, so a slow or stalled scheduler iteration never affects readiness. Registration (`PUT .../registry`) answers from a snapshot that is at most 2 seconds old and holds the restaurant; otherwise one registry read is shared by all concurrent registrations, and a verdict that would be 409 or 410 is confirmed by a read made after the request arrived. Reads refresh the snapshot, later-started reads take precedence over earlier completions, and callers receive independent copies.
 
 `GET /readyz` on the public listener (never proxied by the frontend) answers `{"instance":"<GATEWAY_INSTANCE_ID>","capabilities":{"http":"ok","scheduler":"ok|degraded|down"}}` with status 200 while the process serves. `GATEWAY_INSTANCE_ID` defaults to a random UUID. The scheduler state follows the time since its last successful iteration (`degraded` after three scheduler intervals or any failed iteration, `down` after ten) and never changes the status code; the details are written to the log once per state change. `GET /healthz` only says that the process is alive. The image healthcheck probes `/readyz` in Auth mode and `/healthz` in the legacy mode.
 
@@ -642,11 +644,16 @@ Each restaurant must have the matching local lifecycle version; deleting scopes 
 Gateway is the sole scheduled expiry owner. In Auth mode it polls immediately
 after process start, then at `EXPIRATION_RUN_INTERVAL` (default `1s`). One process
 goroutine owns all runs; a slow run delays later ticks and never overlaps them.
-Each cycle reads a complete Auth registry and fresh Warehouse status. The runner
+Within a run, up to `GATEWAY_EXPIRATION_CONCURRENCY` restaurants (default 8) are
+dispatched in parallel and the run waits for all of them. After
+`GATEWAY_EXPIRATION_ITERATION_BUDGET` (default `10s`) no new dispatch starts; the
+next run begins with the first restaurant left undone, and a run cut this way is
+logged and counted as not complete for scheduler health.
+Each cycle takes the complete Auth registry from the refresher and reads fresh Warehouse status. The runner
 requires a ready restaurant, current Warehouse readiness, and acknowledgments
 for Gateway’s current epoch and Serving. Each attempt has a maximum five-second
-budget and requests a fresh Auth service token for `expiry.due`, one restaurant,
-and that Warehouse epoch. It never requests a human session, registration token,
+budget and uses an Auth service token for `expiry.due`, one restaurant, and that
+Warehouse epoch; a token is reused until ten seconds before it expires. It never requests a human session, registration token,
 or `writeoff.confirm`. Credential failure causes no Warehouse dispatch.
 
 Every due poll has a new UUID run ID. There is one POST per selected tenant per

@@ -108,7 +108,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 			logger.Printf("health response failed")
 		}
 	})
-	expiry, err := expiration.NewScoped(expiration.ScopedOptions{GatewayEpoch: epoch, Auth: schedulerAuth{Client: client, registry: refresher}, Warehouse: business, Changes: changes, Interval: cfg.ExpirationRunInterval, Timeout: cfg.UpstreamTimeout, Now: env.now, NewRunID: newGatewayEpoch, NewTicker: env.newTicker, Logger: logger})
+	expiry, err := expiration.NewScoped(expiration.ScopedOptions{GatewayEpoch: epoch, Auth: schedulerAuth{Client: client, registry: refresher}, Warehouse: business, Changes: changes, Interval: cfg.ExpirationRunInterval, Timeout: cfg.UpstreamTimeout, Concurrency: cfg.ExpirationConcurrency, IterationBudget: cfg.ExpirationIterationBudget, Now: env.now, NewRunID: newGatewayEpoch, NewTicker: env.newTicker, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}
