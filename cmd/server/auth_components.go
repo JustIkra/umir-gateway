@@ -12,6 +12,7 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/adapters/authclient"
 	"github.com/JustIkra/umir-gateway/internal/adapters/httpupstream"
 	"github.com/JustIkra/umir-gateway/internal/adapters/livecursor"
+	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 	"github.com/JustIkra/umir-gateway/internal/config"
 	"github.com/JustIkra/umir-gateway/internal/expiration"
@@ -70,7 +71,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
+	scoped, err := httpapi.NewScoped(httpapi.ScopedOptions{Admission: &admission.TemporaryMemory{PerClient: len(cfg.TrustedProxies) > 0}, Clients: clients, Live: streams, Changes: changes, Auth: client, Business: business, Origin: cfg.Operator.PublicOrigin, SecureCookies: cfg.Operator.CookieMode == config.CookieModeSecure, Now: time.Now, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

@@ -30,9 +30,17 @@ type scopedFixture struct {
 	wrongTenant    bool
 	peer           func(http.ResponseWriter, *http.Request)
 	handler        http.Handler
+	// anonymousTokens counts the anonymous feedback tokens Auth issued.
+	anonymousTokens int
 }
 
 func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
+	t.Helper()
+	return newScopedFixtureWith(t, nil, closeFailure...)
+}
+
+// newScopedFixtureWith adds settings to the Gateway configuration.
+func newScopedFixtureWith(t *testing.T, extra map[string]string, closeFailure ...bool) *scopedFixture {
 	t.Helper()
 	f := &scopedFixture{}
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +54,7 @@ func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
 		case "/internal/auth/v1/public/csrf":
 			writeScopedJSON(t, w, map[string]any{"csrfToken": "csrf"})
 		case "/internal/auth/v1/anonymous-feedback-token":
+			f.anonymousTokens++
 			writeScopedJSON(t, w, map[string]any{"token": "anonymous-token", "expiresAt": time.Now().Add(time.Minute).Format(time.RFC3339Nano)})
 		case "/internal/auth/v1/access-check", "/internal/auth/v1/authorize":
 			var input map[string]any
@@ -100,6 +109,9 @@ func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
 	}))
 	t.Cleanup(peer.Close)
 	values := map[string]string{"AUTH_URL": auth.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin}
+	for key, value := range extra {
+		values[key] = value
+	}
 	app, err := newComponents(loadConfig(t, values), log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)

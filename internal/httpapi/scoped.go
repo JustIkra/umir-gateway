@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"maps"
 	"mime"
 	"net/http"
 	"slices"
@@ -24,7 +25,20 @@ type ScopedChanges interface {
 	ObserveRuntime(string, string, string) error
 }
 
+// AnonymousAdmission limits the submissions of anonymous feedback before Auth is asked for a token. It
+// returns how long the caller should wait, zero when the attempt is admitted. A repeat of an admitted
+// submission is not charged again.
+type AnonymousAdmission interface {
+	Admit(preauth, client string, body []byte, now time.Time) time.Duration
+}
+
+// ClientResolver names the client of a request for per-client budgets.
+type ClientResolver interface{ Client(*http.Request) string }
+
 type ScopedOptions struct {
+	// Admission and Clients are optional: without Admission anonymous feedback is not limited here.
+	Admission     AnonymousAdmission
+	Clients       ClientResolver
 	Live          ScopedLive
 	Changes       ScopedChanges
 	Auth          ScopedAuth
@@ -140,6 +154,11 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var decision AuthorizationResult
 	var token string
 	if op.id == "anonymousFeedback" {
+		if wait := a.admitAnonymous(r, session, preauth, body); wait > 0 {
+			seconds := max(1, int((wait+time.Second-1)/time.Second))
+			a.writeFailure(w, r, &ScopeError{Status: 429, Code: "RateLimited", Outcome: "not_committed", Message: "too many submissions, try later", Retryable: true, RetryAfter: seconds})
+			return
+		}
 		value, err := a.options.Auth.AnonymousToken(r.Context())
 		if err != nil {
 			a.writeFailure(w, r, err)
@@ -451,6 +470,21 @@ func upstreamUnavailable(method string, cause error) *ScopeError {
 	return &ScopeError{Status: status, Code: "UpstreamUnavailable", Outcome: outcome, Message: "upstream response is unavailable", Cause: cause}
 }
 
+// admitAnonymous asks the admission port about one validated, CSRF-checked submission.
+func (a *ScopedAPI) admitAnonymous(r *http.Request, session, preauth string, body []byte) time.Duration {
+	if a.options.Admission == nil {
+		return 0
+	}
+	client := ""
+	if a.options.Clients != nil {
+		client = a.options.Clients.Client(r)
+	}
+	if preauth == "" {
+		preauth = "session:" + session
+	}
+	return a.options.Admission.Admit(preauth, client, body, a.options.Now())
+}
+
 func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err error) {
 	var failure *ScopeError
 	if !errors.As(err, &failure) {
@@ -468,6 +502,13 @@ func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err err
 	w.Header().Set("Cache-Control", "no-store")
 	if copy.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(copy.RetryAfter))
+		if _, set := copy.Details["retryAfterSeconds"]; !set {
+			copy.Details = maps.Clone(copy.Details)
+			if copy.Details == nil {
+				copy.Details = map[string]any{}
+			}
+			copy.Details["retryAfterSeconds"] = copy.RetryAfter
+		}
 	}
 	w.WriteHeader(copy.Status)
 	if err := json.NewEncoder(w).Encode(&copy); err != nil {
