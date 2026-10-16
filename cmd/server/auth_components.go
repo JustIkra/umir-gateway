@@ -60,7 +60,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	changes, err := journal.NewScoped(epoch, cfg.JournalCapacity, 10000, 4096, time.Now, rand.Text, codec)
+	changes, err := journal.NewScoped(epoch, cfg.LiveRingCapacity, 10000, 4096, time.Now, rand.Text, codec)
 	if err != nil {
 		return components{}, err
 	}

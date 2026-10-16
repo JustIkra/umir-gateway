@@ -131,8 +131,8 @@ func TestG4ScopeCloseCannotReviveOrAffectNeighbor(t *testing.T) {
 	stopB()
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if len(j.scopes["A"].subscribers)+len(j.scopes["B"].subscribers) != 0 {
-		t.Fatal("subscriber retained after stop")
+	if j.scopes["A"] != nil || len(j.scopes["B"].subscribers) != 0 {
+		t.Fatal("closed scope kept a live slot or subscriber retained after stop")
 	}
 }
 

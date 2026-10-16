@@ -22,12 +22,12 @@ type Snapshot struct {
 }
 
 type scopeJournal struct {
-	ring        []Change
-	last        int64
-	generation  uint64
-	closed      bool
-	subscribers map[chan struct{}]struct{}
-	runtimes    map[string]string
+	// ring is allocated by the first Append and released when the scope is reset.
+	ring                         []Change
+	last                         int64
+	generation                   uint64
+	subscribers                  map[chan struct{}]struct{}
+	warehouseEpoch, servingEpoch string
 }
 
 type CursorPosition struct {
@@ -51,9 +51,14 @@ type Scoped struct {
 	now                             func() time.Time
 	newCursor                       func() string
 	scopes                          map[string]*scopeJournal
-	codec                           CursorCodec
-	cursors                         map[string]CursorPosition
-	cursorOrder                     []string
+	// closed holds closed scopes outside the live slots, with the generation they closed under.
+	closed map[string]uint64
+	// generations is the process-wide counter every scope generation comes from, so a recreated ring
+	// never repeats a generation a cursor may still carry.
+	generations uint64
+	codec       CursorCodec
+	cursors     map[string]CursorPosition
+	cursorOrder []string
 }
 
 var ErrCursor = errors.New("journal: cursor is not issued for this scope and actor")
@@ -63,31 +68,57 @@ func NewScoped(epoch string, capacity, maxScopes, maxCursors int, now func() tim
 	if epoch == "" || capacity <= 0 || maxScopes <= 0 || maxCursors <= 0 || now == nil || newCursor == nil {
 		return nil, errors.New("journal: scoped dependencies and bounds are required")
 	}
-	return &Scoped{epoch: epoch, capacity: capacity, maxScopes: maxScopes, maxCursors: maxCursors, now: now, newCursor: newCursor, scopes: map[string]*scopeJournal{}, codec: codec, cursors: map[string]CursorPosition{}}, nil
+	return &Scoped{epoch: epoch, capacity: capacity, maxScopes: maxScopes, maxCursors: maxCursors, now: now, newCursor: newCursor, scopes: map[string]*scopeJournal{}, closed: map[string]uint64{}, codec: codec, cursors: map[string]CursorPosition{}}, nil
 }
 
+// get returns the live journal of a scope, creating it without a ring. A closed scope has none.
 func (s *Scoped) get(tenant string) (*scopeJournal, error) {
 	j := s.scopes[tenant]
 	if j == nil {
 		if len(s.scopes) >= s.maxScopes {
 			return nil, ErrCapacity
 		}
-		j = &scopeJournal{ring: make([]Change, s.capacity), generation: 1, subscribers: map[chan struct{}]struct{}{}, runtimes: map[string]string{}}
+		j = &scopeJournal{generation: s.nextGeneration()}
 		s.scopes[tenant] = j
 	}
 	return j, nil
 }
 
+func (s *Scoped) nextGeneration() uint64 {
+	s.generations++
+	return s.generations
+}
+
+func (s *Scoped) isClosed(tenant string) bool {
+	_, closed := s.closed[tenant]
+	return closed
+}
+
 func (s *Scoped) Watch(tenant string) (<-chan struct{}, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed(tenant) {
+		ch := make(chan struct{}, 1)
+		ch <- struct{}{}
+		return ch, func() {}, nil
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return nil, nil, err
 	}
 	ch := make(chan struct{}, 1)
+	if j.subscribers == nil {
+		j.subscribers = map[chan struct{}]struct{}{}
+	}
 	j.subscribers[ch] = struct{}{}
-	return ch, func() { s.mu.Lock(); defer s.mu.Unlock(); delete(j.subscribers, ch) }, nil
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(j.subscribers, ch)
+		if len(j.subscribers) == 0 {
+			j.subscribers = nil
+		}
+	}, nil
 }
 
 func signalScope(j *scopeJournal) {
@@ -102,12 +133,12 @@ func signalScope(j *scopeJournal) {
 func (s *Scoped) Append(tenant string, topics []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed(tenant) {
+		return errors.New("journal: scope is closed")
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return err
-	}
-	if j.closed {
-		return errors.New("journal: scope is closed")
 	}
 	if len(topics) == 0 || len(topics) > 5 {
 		return errors.New("journal: invalid change topics")
@@ -119,6 +150,9 @@ func (s *Scoped) Append(tenant string, topics []string) error {
 		}
 		seen[topic] = true
 	}
+	if j.ring == nil {
+		j.ring = make([]Change, s.capacity)
+	}
 	j.last++
 	j.ring[(j.last-1)%int64(len(j.ring))] = Change{Sequence: j.last, Topics: slices.Clone(topics)}
 	signalScope(j)
@@ -128,42 +162,53 @@ func (s *Scoped) Append(tenant string, topics []string) error {
 func (s *Scoped) CloseScope(tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	j, err := s.get(tenant)
-	if err != nil {
-		return err
+	if s.isClosed(tenant) {
+		return nil
 	}
-	j.closed = true
-	j.generation++
-	clear(j.ring)
-	signalScope(j)
+	if len(s.closed) >= s.maxScopes {
+		return ErrCapacity
+	}
+	generation := s.nextGeneration()
+	if j := s.scopes[tenant]; j != nil {
+		delete(s.scopes, tenant)
+		signalScope(j)
+	}
+	s.closed[tenant] = generation
 	return nil
 }
 
 func (s *Scoped) Reset(tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed(tenant) {
+		return errors.New("journal: scope is closed")
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return err
 	}
-	if j.closed {
-		return errors.New("journal: scope is closed")
-	}
-	j.generation++
-	j.last = 0
-	clear(j.ring)
-	signalScope(j)
+	s.resetRing(j)
 	return nil
+}
+
+func (s *Scoped) resetRing(j *scopeJournal) {
+	j.generation = s.nextGeneration()
+	j.last = 0
+	j.ring = nil
+	signalScope(j)
 }
 
 func (s *Scoped) Read(tenant, actor, handle string, after int64, generation uint64) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if generation, closed := s.closed[tenant]; closed {
+		return Snapshot{Epoch: s.epoch, Closed: true, Generation: generation}, nil
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	result := Snapshot{Epoch: s.epoch, Last: j.last, Closed: j.closed, Generation: j.generation}
+	result := Snapshot{Epoch: s.epoch, Last: j.last, Generation: j.generation}
 	if handle != "" {
 		c, ok := s.cursors[handle]
 		if !ok && s.codec != nil {
@@ -195,11 +240,14 @@ func (s *Scoped) Read(tenant, actor, handle string, after int64, generation uint
 func (s *Scoped) Cursor(tenant, actor string, sequence int64, generation uint64) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.isClosed(tenant) {
+		return "", ErrCursor
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return "", err
 	}
-	if j.closed || generation != j.generation || sequence < 1 || sequence > j.last {
+	if generation != j.generation || sequence < 1 || sequence > j.last {
 		return "", ErrCursor
 	}
 	position := CursorPosition{Tenant: tenant, Actor: actor, Epoch: s.epoch, Sequence: sequence, Generation: generation, Expires: s.now().Add(5 * time.Minute)}
@@ -234,19 +282,20 @@ func (s *Scoped) ObserveRuntime(tenant, service, epoch string) error {
 	if service != "warehouse" && service != "serving" {
 		return errors.New("journal: invalid runtime service")
 	}
+	if s.isClosed(tenant) {
+		return errors.New("journal: scope is closed")
+	}
 	j, err := s.get(tenant)
 	if err != nil {
 		return err
 	}
-	if j.closed {
-		return errors.New("journal: scope is closed")
+	epochOf := &j.warehouseEpoch
+	if service == "serving" {
+		epochOf = &j.servingEpoch
 	}
-	if previous := j.runtimes[service]; previous != "" && previous != epoch {
-		j.generation++
-		j.last = 0
-		clear(j.ring)
-		signalScope(j)
+	if previous := *epochOf; previous != "" && previous != epoch {
+		s.resetRing(j)
 	}
-	j.runtimes[service] = epoch
+	*epochOf = epoch
 	return nil
 }

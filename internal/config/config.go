@@ -47,6 +47,8 @@ type Config struct {
 	// the Auth mode; the legacy runner has no pool.
 	ExpirationConcurrency     int
 	ExpirationIterationBudget time.Duration
+	// LiveRingCapacity is how many changes the replay ring of one restaurant keeps (Auth mode).
+	LiveRingCapacity int
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -166,6 +168,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if err := loadSchedulerPool(&cfg, value); err != nil {
 			return Config{}, err
 		}
+		if err := loadLive(&cfg, value); err != nil {
+			return Config{}, err
+		}
 	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
@@ -222,6 +227,22 @@ func loadSchedulerPool(cfg *Config, value func(key, fallback string) string) err
 	cfg.ExpirationIterationBudget, err = duration("GATEWAY_EXPIRATION_ITERATION_BUDGET", value("GATEWAY_EXPIRATION_ITERATION_BUDGET", "10s"))
 	if err != nil || cfg.ExpirationIterationBudget < minExpirationIterationBudget || cfg.ExpirationIterationBudget > maxExpirationIterationBudget {
 		return errors.New("GATEWAY_EXPIRATION_ITERATION_BUDGET: expected a duration from 1s to 5m")
+	}
+	return nil
+}
+
+// Bounds of the live replay ring.
+const (
+	minLiveRingCapacity = 16
+	maxLiveRingCapacity = 4096
+)
+
+// loadLive reads the Auth-mode live settings. It never echoes a value.
+func loadLive(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.LiveRingCapacity, err = strconv.Atoi(value("GATEWAY_LIVE_RING_CAPACITY", "128"))
+	if err != nil || cfg.LiveRingCapacity < minLiveRingCapacity || cfg.LiveRingCapacity > maxLiveRingCapacity {
+		return fmt.Errorf("GATEWAY_LIVE_RING_CAPACITY: expected an integer from %d to %d", minLiveRingCapacity, maxLiveRingCapacity)
 	}
 	return nil
 }

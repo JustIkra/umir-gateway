@@ -325,3 +325,25 @@ func TestW1ExpirationPoolSettingsIgnoredWithoutAuth(t *testing.T) {
 		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
 	}
 }
+
+func TestW1LiveRingCapacity(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.LiveRingCapacity != 128 {
+		t.Fatalf("default: %d %v", cfg.LiveRingCapacity, err)
+	}
+	for _, raw := range []string{"0", "15", "4097", "-1", "many"} {
+		_, err := Load(env(authValues(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": raw})))
+		if err == nil || strings.Contains(err.Error(), "many") {
+			t.Fatalf("value %q: %v", raw, err)
+		}
+	}
+	for raw, want := range map[string]int{"16": 16, "4096": 4096} {
+		cfg, err := Load(env(authValues(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": raw})))
+		if err != nil || cfg.LiveRingCapacity != want {
+			t.Fatalf("bound %s rejected: %v", raw, err)
+		}
+	}
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": "many"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}

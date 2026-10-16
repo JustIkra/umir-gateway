@@ -47,7 +47,12 @@ type GatewayRuntime struct {
 	opts    RuntimeOptions
 	mu      sync.Mutex
 	entries map[string]runtimeEntry
+	// live and closed count the entries by state: each class has its own bound.
+	live, closed int
 }
+
+// maxRuntimeEntries bounds live and closed registrations separately; the contract allows 10 000 each.
+const maxRuntimeEntries = 10000
 
 func NewGatewayRuntime(opts RuntimeOptions) (*GatewayRuntime, error) {
 	if opts.Auth == nil || opts.ServiceKey == "" || opts.Epoch == "" || opts.TZDataVersion == "" || opts.Changes == nil {
@@ -176,16 +181,27 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		runtimeFailure(w, 409, "CommandConflict", "not_committed")
 		return
 	}
-	if !exists && len(g.entries) >= 10000 {
+	closed := operation == "runtime.close"
+	if !exists && (closed && g.closed >= maxRuntimeEntries || !closed && g.live >= maxRuntimeEntries) ||
+		exists && !previous.closed && closed && g.closed >= maxRuntimeEntries {
 		runtimeFailure(w, 503, "ServiceUnavailable", "unavailable")
 		return
 	}
-	closed := operation == "runtime.close"
 	if closed && (!exists || !previous.closed) {
 		if err := g.opts.Changes.CloseScope(tenant); err != nil {
 			runtimeFailure(w, 503, "ServiceUnavailable", "unavailable")
 			return
 		}
+	}
+	if exists && previous.closed {
+		g.closed--
+	} else if exists {
+		g.live--
+	}
+	if closed {
+		g.closed++
+	} else {
+		g.live++
 	}
 	g.entries[tenant] = runtimeEntry{version: version, operation: input.OperationID, closed: closed}
 	state := "ready"
