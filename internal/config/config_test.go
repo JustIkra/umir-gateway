@@ -347,3 +347,22 @@ func TestW1LiveRingCapacity(t *testing.T) {
 		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
 	}
 }
+
+func TestW1LiveStreamLimits(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.LiveMaxStreams != 64 || cfg.LiveMaxStreamsPerSession != 8 || cfg.LiveMaxStreamsPerOrg != 32 {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_LIVE_MAX_STREAMS": "200", "GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": "2", "GATEWAY_LIVE_MAX_STREAMS_PER_ORG": "100"})))
+	if err != nil || cfg.LiveMaxStreams != 200 || cfg.LiveMaxStreamsPerSession != 2 || cfg.LiveMaxStreamsPerOrg != 100 {
+		t.Fatalf("custom: %+v %v", cfg, err)
+	}
+	for _, key := range []string{"GATEWAY_LIVE_MAX_STREAMS", "GATEWAY_LIVE_MAX_STREAMS_PER_SESSION", "GATEWAY_LIVE_MAX_STREAMS_PER_ORG"} {
+		for _, raw := range []string{"0", "-1", "many", "100001"} {
+			_, err := Load(env(authValues(map[string]string{key: raw})))
+			if err == nil || strings.Contains(err.Error(), "many") {
+				t.Fatalf("%s=%q: %v", key, raw, err)
+			}
+		}
+	}
+}

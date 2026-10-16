@@ -64,7 +64,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, PerSession: live.DefaultPerSession, Total: live.DefaultTotal, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
+	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

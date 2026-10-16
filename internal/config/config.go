@@ -49,6 +49,9 @@ type Config struct {
 	ExpirationIterationBudget time.Duration
 	// LiveRingCapacity is how many changes the replay ring of one restaurant keeps (Auth mode).
 	LiveRingCapacity int
+	// LiveMaxStreams, LiveMaxStreamsPerSession and LiveMaxStreamsPerOrg bound the open SSE streams of
+	// the process, of one session and of one organization (Auth mode).
+	LiveMaxStreams, LiveMaxStreamsPerSession, LiveMaxStreamsPerOrg int
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -235,6 +238,7 @@ func loadSchedulerPool(cfg *Config, value func(key, fallback string) string) err
 const (
 	minLiveRingCapacity = 16
 	maxLiveRingCapacity = 4096
+	maxLiveStreams      = 100_000
 )
 
 // loadLive reads the Auth-mode live settings. It never echoes a value.
@@ -243,6 +247,18 @@ func loadLive(cfg *Config, value func(key, fallback string) string) error {
 	cfg.LiveRingCapacity, err = strconv.Atoi(value("GATEWAY_LIVE_RING_CAPACITY", "128"))
 	if err != nil || cfg.LiveRingCapacity < minLiveRingCapacity || cfg.LiveRingCapacity > maxLiveRingCapacity {
 		return fmt.Errorf("GATEWAY_LIVE_RING_CAPACITY: expected an integer from %d to %d", minLiveRingCapacity, maxLiveRingCapacity)
+	}
+	for key, setting := range map[string]struct {
+		fallback string
+		target   *int
+	}{
+		"GATEWAY_LIVE_MAX_STREAMS":             {"64", &cfg.LiveMaxStreams},
+		"GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": {"8", &cfg.LiveMaxStreamsPerSession},
+		"GATEWAY_LIVE_MAX_STREAMS_PER_ORG":     {"32", &cfg.LiveMaxStreamsPerOrg},
+	} {
+		if *setting.target, err = strconv.Atoi(value(key, setting.fallback)); err != nil || *setting.target < 1 || *setting.target > maxLiveStreams {
+			return fmt.Errorf("%s: expected an integer from 1 to %d", key, maxLiveStreams)
+		}
 	}
 	return nil
 }
