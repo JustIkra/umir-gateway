@@ -279,16 +279,32 @@ func healthcheck(port, path string) (result error) {
 	return nil
 }
 
+// checkCommand accepts no arguments or one of serve (the explicit name of the default start),
+// healthcheck and clear-sessions; hash-password is handled before it. Gateway has no database, so there
+// are no migrate or generation commands, and a typo must not start the server. Only the test child,
+// which the Go test runner starts with its own -test.* flags, may carry such options.
+func checkCommand(args []string, testChild bool) error {
+	usage := errors.New("usage: server [serve|healthcheck|hash-password|clear-sessions]")
+	rest := args[1:]
+	if testChild {
+		rest = slices.DeleteFunc(slices.Clone(rest), func(a string) bool { return strings.HasPrefix(a, "-test.") })
+	}
+	if len(rest) == 0 {
+		return nil
+	}
+	if len(rest) > 1 || !slices.Contains([]string{"serve", "healthcheck", "clear-sessions"}, rest[0]) {
+		return usage
+	}
+	return nil
+}
+
 func main() {
 	// hash-password runs before configuration: it is used to create the bootstrap settings.
 	if len(os.Args) >= 2 && os.Args[1] == "hash-password" {
 		os.Exit(runHashPassword(os.Args[2:]))
 	}
-	// serve is the explicit name of the default command; Gateway has no database, so no migrate or
-	// generation commands exist.
-	// An option-like first argument (the test runner's flags) names no command.
-	if len(os.Args) >= 2 && !strings.HasPrefix(os.Args[1], "-") && (!slices.Contains([]string{"serve", "healthcheck", "clear-sessions"}, os.Args[1]) || len(os.Args) > 2) {
-		log.Fatal("usage: server [serve|healthcheck|hash-password|clear-sessions]")
+	if err := checkCommand(os.Args, os.Getenv("UMIR_GATEWAY_TEST_CHILD") == "1"); err != nil {
+		log.Fatal(err)
 	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {

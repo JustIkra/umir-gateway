@@ -106,7 +106,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if op.id != "live" && a.options.BodyTimeout > 0 {
 		// A stalled sender must not hold the handler open: http.Server.ReadTimeout would also cut SSE.
 		// A writer without deadline support (a test recorder) is simply not bounded.
-		if err := controller.SetReadDeadline(time.Now().Add(a.options.BodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		if err := controller.SetReadDeadline(a.options.Now().Add(a.options.BodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			a.options.Logger.Printf("scoped body deadline failed")
 		}
 	}

@@ -94,3 +94,44 @@ func TestW1UnknownSubcommandIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestW1CheckCommand(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args      []string
+		testChild bool
+		ok        bool
+	}{
+		"no arguments":        {[]string{"server"}, false, true},
+		"serve":               {[]string{"server", "serve"}, false, true},
+		"healthcheck":         {[]string{"server", "healthcheck"}, false, true},
+		"clear-sessions":      {[]string{"server", "clear-sessions"}, false, true},
+		"typo flag":           {[]string{"server", "--typo"}, false, false},
+		"short flag":          {[]string{"server", "-x"}, false, false},
+		"test flag outside":   {[]string{"server", "-test.run=X"}, false, false},
+		"migrate":             {[]string{"server", "migrate"}, false, false},
+		"serve with extra":    {[]string{"server", "serve", "extra"}, false, false},
+		"test flag in child":  {[]string{"server", "-test.run=X"}, true, true},
+		"typo flag in child":  {[]string{"server", "--typo"}, true, false},
+		"serve in child":      {[]string{"server", "-test.run=X", "serve"}, true, true},
+		"typo with test flag": {[]string{"server", "-test.run=X", "--typo"}, true, false},
+		"serve then extra":    {[]string{"server", "serve", "-test.run=X", "x"}, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := checkCommand(tc.args, tc.testChild); (err == nil) != tc.ok {
+				t.Fatalf("checkCommand(%v, %v) = %v", tc.args, tc.testChild, err)
+			}
+		})
+	}
+}
+
+func TestW1TypoFlagDoesNotStartServer(t *testing.T) {
+	_, exited := startChild(t, "--typo", operatorEnv(t))
+	select {
+	case err := <-exited:
+		if err == nil {
+			t.Fatal("a mistyped option started the server")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the process kept running")
+	}
+}

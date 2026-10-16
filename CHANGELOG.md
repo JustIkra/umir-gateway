@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Refuse options in the command line: `server --typo` no longer starts the server. Only the test child process may carry the Go test runner's `-test.*` flags. The request body deadline uses the injected clock.
+
+- Reserve the organization summary byte budget before a page is read: the owner client now reads at most the reserved bytes of a reply (`BusinessRequest.MaxBytes`), so `GATEWAY_SUMMARY_MAX_BYTES` bounds what the summary holds at once, not only what it keeps.
+
 - Lock the owner error enum at the scoped boundary (C29): `CommandConflict`, `LimitExceeded`, `InvalidArgument`, `ServiceUnavailable` and `RateLimited` with `Retry-After` and `details.retryAfterSeconds` cross it unchanged, and a code outside the enum, such as `CommandIdentityConflict`, stays a 502. The Auth facade now also passes `409 CommandConflict` with outcome `unknown` (a retry after Auth cleared the command result) instead of turning it into `503 AuthUnavailable`.
 
 - Read the service keys from files and add the `serve` subcommand. `AUTH_SERVICE_KEY`, `AUTH_RUNTIME_SERVICE_KEY`, `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY` and `FEEDBACK_SERVICE_KEY` also accept `<NAME>_FILE` (read whole, one trailing newline dropped, at most 4096 bytes); setting both forms is a start error and no value or file content reaches an error. The variables keep working. `server serve` is an explicit synonym of the default start; any other command is refused. Gateway has no `migrate` or `generation rotate`.
