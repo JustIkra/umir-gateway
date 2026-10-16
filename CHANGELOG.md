@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `make integration` and a CI job that run the tests tagged `integration` on real RabbitMQ and Redis (`UMIR_TEST_AMQP_URL`, `UMIR_TEST_REDIS_LIMITER_URL`); each test works in its own virtual host and key prefix. The Redis limiter and RabbitMQ adapters are copied from the factory reference (`internal/adapters/redislimiter`, `internal/adapters/rabbitmq`) without changes.
+
 - Refuse options in the command line: `server --typo` no longer starts the server. Only the test child process may carry the Go test runner's `-test.*` flags. The request body deadline uses the injected clock.
 
 - Reserve the organization summary byte budget before a page is read: the owner client now reads at most the reserved bytes of a reply (`BusinessRequest.MaxBytes`), so `GATEWAY_SUMMARY_MAX_BYTES` bounds what the summary holds at once, not only what it keeps.

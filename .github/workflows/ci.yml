@@ -51,10 +51,53 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  integration:
+    name: Integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      rabbitmq:
+        image: rabbitmq:4.1-management
+        env:
+          RABBITMQ_DEFAULT_USER: umir
+          RABBITMQ_DEFAULT_PASS: umir-ci-only
+        ports:
+          - 55672:5672
+          - 55673:15672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run integration tests on RabbitMQ and Redis
+        env:
+          GOWORK: 'off'
+          UMIR_TEST_AMQP_URL: amqp://umir:umir-ci-only@127.0.0.1:55672/%2F
+          UMIR_TEST_AMQP_MANAGEMENT_URL: http://umir:umir-ci-only@127.0.0.1:55673
+          UMIR_TEST_REDIS_LIMITER_URL: redis://127.0.0.1:56379/0
+        run: make integration
+
   publish:
     name: Publish image
     timeout-minutes: 30
-    needs: check
+    needs: [check, integration]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:

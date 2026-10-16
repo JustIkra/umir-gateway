@@ -67,6 +67,9 @@ architecture() {
   "$arch" --output-color=false check --project-path "$root" --arch-file "$root/.go-arch-lint.yml"
 }
 tests() { go test -race -count=1 -timeout=15m ./...; }
+# integration runs the tests tagged integration against the RabbitMQ and Redis of the durable test
+# infrastructure (UMIR_TEST_AMQP_URL, UMIR_TEST_REDIS_LIMITER_URL); without them the suite fails, it never skips.
+integration() { go test -tags integration -p 1 -race -count=1 -timeout=15m ./...; }
 inventory
 case "$action" in
   fmt)
@@ -83,6 +86,7 @@ case "$action" in
   lint) lint ;;
   arch) architecture ;;
   test) tests ;;
+  integration) integration ;;
   check) format_check; build; lint; architecture; tests ;;
   *) printf 'Unknown quality command: %s\n' "$action" >&2; exit 1 ;;
 esac
