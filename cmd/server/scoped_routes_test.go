@@ -28,6 +28,7 @@ type scopedFixture struct {
 	requests       []capturedScoped
 	deny           bool
 	wrongTenant    bool
+	userID         string
 	peer           func(http.ResponseWriter, *http.Request)
 	handler        http.Handler
 	// anonymousTokens counts the anonymous feedback tokens Auth issued.
@@ -96,7 +97,11 @@ func newScopedFixtureLogged(t *testing.T, extra map[string]string, logs io.Write
 			if input["operation"] == "recommendations" {
 				permissions = []string{"recommendations.read", "consumer.recommendations.read"}
 			}
-			writeScopedJSON(t, w, map[string]any{"userID": "11111111-1111-4111-8111-111111111111", "sessionID": "55555555-5555-4555-8555-555555555555", "sessionVersion": "1", "credentialVersion": "1", "accessVersion": "1", "orgID": scopedOrg, "tenantID": tenant, "permissions": permissions, "settings": settings, "lifecycleVersion": "1", "token": "auth-issued-token", "expiresAt": time.Now().Add(time.Minute).Format(time.RFC3339Nano), "session": map[string]any{"expiresAt": "2099-10-13T10:00:00+03:00", "idleExpiresAt": "2099-10-13T10:00:00+03:00", "absoluteExpiresAt": "2099-10-13T11:00:00+03:00", "rememberMe": false, "csrfToken": "csrf"}})
+			userID := f.userID
+			if userID == "" {
+				userID = "11111111-1111-4111-8111-111111111111"
+			}
+			writeScopedJSON(t, w, map[string]any{"userID": userID, "sessionID": "55555555-5555-4555-8555-555555555555", "sessionVersion": "1", "credentialVersion": "1", "accessVersion": "1", "orgID": scopedOrg, "tenantID": tenant, "permissions": permissions, "settings": settings, "lifecycleVersion": "1", "token": "auth-issued-token", "expiresAt": time.Now().Add(time.Minute).Format(time.RFC3339Nano), "session": map[string]any{"expiresAt": "2099-10-13T10:00:00+03:00", "idleExpiresAt": "2099-10-13T10:00:00+03:00", "absoluteExpiresAt": "2099-10-13T11:00:00+03:00", "rememberMe": false, "csrfToken": "csrf"}})
 		default:
 			t.Errorf("unexpected Auth path %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -134,6 +139,30 @@ func newScopedFixtureLogged(t *testing.T, extra map[string]string, logs io.Write
 		f.handler = g4CloseFailureHandler(t, loadConfig(t, values))
 	}
 	return f
+}
+
+func TestG2OrderAdmissionScopesIDsAndCanonicalizesExactRetries(t *testing.T) {
+	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_BUDGET_ORDER_USER": "1/1m", "GATEWAY_BUDGET_ORDER_RESTAURANT": "1/1m"})
+	path := "/api/v2/r/" + scopedRestaurant + "/serving/order-confirmations"
+	first := `{"commandID":"shared-command","proposalID":"proposal-a"}`
+	reformatted := `{ "proposalID" : "proposal-a", "commandID" : "shared-command" }`
+	if w := f.request(http.MethodPost, path, first, nil); w.Code != http.StatusConflict || len(f.requests) != 1 {
+		t.Fatalf("first owner result=%d requests=%d body=%s", w.Code, len(f.requests), w.Body)
+	}
+	if w := f.request(http.MethodPost, path, reformatted, nil); w.Code != http.StatusConflict || len(f.requests) != 2 {
+		t.Fatalf("exact semantic retry was charged again: result=%d requests=%d body=%s", w.Code, len(f.requests), w.Body)
+	}
+	otherPath := "/api/v2/r/" + scopedOtherRestaurant + "/serving/order-confirmations"
+	f.userID = "99999999-9999-4999-8999-999999999999"
+	if w := f.request(http.MethodPost, otherPath, first, nil); w.Code != http.StatusConflict || len(f.requests) != 3 {
+		t.Fatalf("same ID in another scope collided: result=%d requests=%d body=%s", w.Code, len(f.requests), w.Body)
+	}
+	if w := f.request(http.MethodPost, path, `{"commandID":"different-command","proposalID":"proposal-b"}`, nil); w.Code != http.StatusTooManyRequests || len(f.requests) != 3 {
+		t.Fatalf("a new command did not consume the next slot: result=%d requests=%d body=%s", w.Code, len(f.requests), w.Body)
+	}
+	if f.requests[0].Body != first || f.requests[1].Body != reformatted {
+		t.Fatalf("Gateway changed the owner payloads: %q %q", f.requests[0].Body, f.requests[1].Body)
+	}
 }
 
 func writeScopedJSON(t *testing.T, w http.ResponseWriter, v any) {

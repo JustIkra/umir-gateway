@@ -205,7 +205,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token = decision.Token
 	}
 	if op.id == "prepareOrder" || op.id == "confirmOrder" {
-		if failure := a.admitOrder(r, id, decision, body); failure != nil {
+		if failure := a.admitOrder(r, op, id, decision, body); failure != nil {
 			a.writeFailure(w, r, failure)
 			return
 		}
@@ -527,20 +527,38 @@ func (a *ScopedAPI) admitFeedback(r *http.Request, session, preauth string, body
 	return a.admit(r, admission.RuleFeedback, admission.Subjects{Preauth: preauth, Client: client, Global: true}, admission.Attempt{ID: fingerprint, Fingerprint: fingerprint})
 }
 
-func (a *ScopedAPI) admitOrder(r *http.Request, restaurant string, decision AuthorizationResult, body []byte) *ScopeError {
+func (a *ScopedAPI) admitOrder(r *http.Request, op *scopeOperation, restaurant string, decision AuthorizationResult, body []byte) *ScopeError {
 	if a.options.Admission == nil {
 		return nil
+	}
+	canonical, err := canonicalAdmissionJSON(body)
+	if err != nil {
+		return &ScopeError{Status: http.StatusBadRequest, Code: "InvalidArgument", Outcome: "not_committed", Message: "invalid order input", Cause: err}
 	}
 	var input struct {
 		CommandID string `json:"commandID"`
 	}
 	_ = json.Unmarshal(body, &input)
-	attemptID := input.CommandID
-	if attemptID == "" {
-		sum := sha256.Sum256(body)
-		attemptID = hex.EncodeToString(sum[:])
+	identity := []byte(strings.Join([]string{"order", op.id, decision.OrgID, decision.UserID, restaurant, input.CommandID}, "\x00"))
+	if input.CommandID == "" {
+		identity = append(identity, 0)
+		identity = append(identity, canonical...)
 	}
-	return a.admit(r, admission.RuleOrder, admission.Subjects{User: decision.UserID, Restaurant: restaurant}, admission.Attempt{ID: attemptID, Fingerprint: string(body)})
+	sum := sha256.Sum256(identity)
+	return a.admit(r, admission.RuleOrder, admission.Subjects{User: decision.UserID, Restaurant: restaurant}, admission.Attempt{ID: hex.EncodeToString(sum[:]), Fingerprint: string(canonical)})
+}
+
+func canonicalAdmissionJSON(body []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("multiple JSON values")
+	}
+	return json.Marshal(value)
 }
 
 func (a *ScopedAPI) admit(r *http.Request, rule admission.Rule, subjects admission.Subjects, attempt admission.Attempt) *ScopeError {
