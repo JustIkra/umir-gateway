@@ -291,7 +291,7 @@ func (s *Scoped) applyWarehouseEvent(event Event) error {
 	if j == nil || j.orgID == "" || j.orgID != event.OrgID {
 		return nil
 	}
-	ownerKey := event.Owner + "\x00" + event.AggregateID
+	ownerKey := ownerStateKey(event)
 	state := j.owners[ownerKey]
 	switch {
 	case state.generation != "" && state.generation != event.Generation:
@@ -338,7 +338,7 @@ func (s *Scoped) applyAuthEvent(event Event) error {
 	accepted := make([]string, 0, len(tenants))
 	for _, tenant := range tenants {
 		j := s.scopes[tenant]
-		state := j.owners[event.Owner+"\x00"+event.AggregateID]
+		state := j.owners[ownerStateKey(event)]
 		if state.generation == event.Generation && event.AggregateRevision <= state.revision {
 			continue
 		}
@@ -355,7 +355,9 @@ func (s *Scoped) applyAuthEvent(event Event) error {
 		if _, closed := s.closed[event.RestaurantID]; !closed && len(s.closed) >= s.maxClosedScopes {
 			return ErrCapacity
 		}
-		s.acceptAuthEvent(event.RestaurantID, event)
+		if s.scopes[event.RestaurantID] != nil {
+			s.acceptAuthEvent(event.RestaurantID, event)
+		}
 		return s.closeScopeLockedCapacity(event.RestaurantID)
 	case "auth.organization.deleting", "auth.organization.deleted":
 		if len(tenants) > 0 && len(accepted) == 0 {
@@ -379,13 +381,23 @@ func (s *Scoped) applyAuthEvent(event Event) error {
 
 func (s *Scoped) acceptAuthEvent(tenant string, event Event) {
 	j := s.scopes[tenant]
-	ownerKey := event.Owner + "\x00" + event.AggregateID
+	if j == nil {
+		return
+	}
+	ownerKey := ownerStateKey(event)
 	state := j.owners[ownerKey]
 	if state.generation != "" && state.generation != event.Generation {
 		s.resetRing(j)
 	}
 	j.owners[ownerKey] = ownerState{generation: event.Generation, revision: event.AggregateRevision, hasRevision: true}
 	j.lastActivity = s.now()
+}
+
+func ownerStateKey(event Event) string {
+	if event.Owner == "auth" {
+		return event.Owner
+	}
+	return event.Owner + "\x00" + event.AggregateID
 }
 
 var allTopics = []string{"catalog", "stock", "menu", "orders", "analytics"}

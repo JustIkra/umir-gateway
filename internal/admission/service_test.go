@@ -73,8 +73,8 @@ func TestW2DimensionsHideSubjectsAndFollowTheRule(t *testing.T) {
 	if l.requests[1].Dimensions[0].Key == r.Dimensions[0].Key || l.requests[1].Dimensions[1].Key != r.Dimensions[1].Key {
 		t.Fatal("subjects must map to stable, distinct keys")
 	}
-	if l.requests[1].Fingerprint == r.Fingerprint {
-		t.Fatal("the fingerprint must cover the subjects, or a retry from another client would count as a replay")
+	if l.requests[1].Fingerprint != r.Fingerprint {
+		t.Fatal("attempt fingerprint must remain stable when a retry's client dimension changes")
 	}
 }
 
@@ -95,6 +95,20 @@ func TestW2EmptySubjectsLeaveDimensionsOut(t *testing.T) {
 	}
 	if got := len(l.requests[1].Dimensions); got != 1 {
 		t.Fatalf("global stays off unless asked: %d", got)
+	}
+}
+
+func TestW2FeedbackAttemptFingerprintStillBindsDimensions(t *testing.T) {
+	l := &recordingLimiter{decision: Decision{Allowed: true}}
+	s := newTestService(t, l, fixedContinuity{})
+	attempt := Attempt{ID: "feedback-attempt", Fingerprint: "body-digest"}
+	for _, client := range []string{"203.0.113.10", "203.0.113.11"} {
+		if _, err := s.Admit(context.Background(), RuleFeedback, Subjects{Client: client, Preauth: "preauth", Global: true}, attempt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if l.requests[0].Fingerprint == l.requests[1].Fingerprint {
+		t.Fatal("feedback identity must continue to include its scoped dimensions")
 	}
 }
 

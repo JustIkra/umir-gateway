@@ -332,6 +332,12 @@ func (h *Handler) ServeScope(w http.ResponseWriter, r *http.Request, tenant, ses
 		case <-ctx.Done():
 			return
 		case <-signals:
+			if err := checkAccess(); err != nil {
+				if ctx.Err() == nil {
+					end(err)
+				}
+				return
+			}
 			next, err := h.opts.Journal.Read(tenant, actor, "", after, generation)
 			if err != nil {
 				end(err)

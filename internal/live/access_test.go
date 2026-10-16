@@ -151,6 +151,46 @@ func TestG4RevalidatesBeforeEveryChangeAndStopsReplay(t *testing.T) {
 	}
 }
 
+func TestScopedAuthRevocationSignalRechecksAccessImmediately(t *testing.T) {
+	f := g4Live(t, 2, 4)
+	checks := make(chan struct{}, 4)
+	f.checker.mu.Lock()
+	f.checker.onCheck = func() {
+		select {
+		case checks <- struct{}{}:
+		default:
+		}
+	}
+	f.checker.mu.Unlock()
+	response := g4LiveOpen(t, f, g4Tenant, "actor", "")
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	reader := bufio.NewReader(response.Body)
+	g4Event(t, reader)
+	select {
+	case <-checks:
+	case <-time.After(time.Second):
+		t.Fatal("initial Auth check did not complete")
+	}
+	f.checker.deny(&httpapi.ScopeError{Status: http.StatusForbidden, Code: "Forbidden"})
+	event := journal.Event{EventID: "membership-revoked", Owner: "auth", Type: "auth.membership.revoked", SchemaVersion: 1, OrgID: "22222222-2222-4222-8222-222222222222", AggregateID: "11111111-1111-4111-8111-111111111111", AggregateRevision: 1, Generation: "44444444-4444-4444-8444-444444444444", OccurredAt: time.Now()}
+	if err := f.journal.Apply(event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-checks:
+	case <-time.After(time.Second):
+		t.Fatal("Auth revocation signal did not trigger an immediate access check")
+	}
+	terminal, _ := g4Event(t, reader)
+	if !strings.HasPrefix(terminal, "access-ended ") || !strings.Contains(terminal, `"reason":"revoked"`) {
+		t.Fatalf("unexpected terminal frame: %s", terminal)
+	}
+}
+
 func TestG4OpaqueCursorBoundToRestaurantAndSession(t *testing.T) {
 	f := g4Live(t, 3, 5)
 	response := g4LiveOpen(t, f, g4Tenant, "actor", "")

@@ -225,7 +225,11 @@ func (s *Service) Admit(ctx context.Context, rule Rule, subjects Subjects, attem
 		}
 		key := p.spec.budget + ":" + budget.Window.String() + ":" + p.subject
 		request.Dimensions = append(request.Dimensions, Dimension{Key: key, Limit: limit, Window: budget.Window})
-		fingerprint += "\x00" + key + "\x00" + strconv.Itoa(budget.Limit)
+		if rule == RuleRegistration || rule == RuleReset {
+			fingerprint += "\x00" + p.spec.budget + "\x00" + budget.Window.String() + "\x00" + strconv.Itoa(budget.Limit)
+		} else {
+			fingerprint += "\x00" + key + "\x00" + strconv.Itoa(budget.Limit)
+		}
 	}
 	sum := sha256.Sum256([]byte(fingerprint))
 	request.Fingerprint = hex.EncodeToString(sum[:])

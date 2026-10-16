@@ -270,6 +270,26 @@ func TestScopedApplyDoesNotCloseRestaurantFromForeignOrganization(t *testing.T) 
 	}
 }
 
+func TestScopedApplyRestaurantDeletionWithoutLiveScopeIsSafe(t *testing.T) {
+	j, _ := applyJournal(t, TopicsAll)
+	restaurant := "33333333-3333-4333-8333-333333333333"
+	for i, eventType := range []string{"auth.restaurant.deleting", "auth.restaurant.deleted"} {
+		event := Event{EventID: fmt.Sprintf("auth-delete-%d", i), Owner: "auth", Type: eventType, SchemaVersion: 1, OrgID: applyOrg, RestaurantID: restaurant, AggregateID: restaurant, AggregateRevision: int64(i + 1), Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+		if err := j.Apply(event); err != nil {
+			t.Fatalf("apply %s without live ring: %v", eventType, err)
+		}
+	}
+	if _, _, err := j.WatchScope(restaurant, applyOrg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Read(restaurant, "actor", "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, closed := j.closed[restaurant]; !closed {
+		t.Fatal("deleting event did not retain a tombstone without a live ring")
+	}
+}
+
 func TestScopedEventIDLRUIsBoundedPerOwner(t *testing.T) {
 	j, _ := applyJournal(t, TopicsAll)
 	tenant := "33333333-3333-4333-8333-333333333333"
@@ -293,6 +313,26 @@ func TestScopedEventIDLRUIsBoundedPerOwner(t *testing.T) {
 	}
 	if got := len(j.seenEventIDs["warehouse"]); got != eventIDLimit {
 		t.Fatalf("Warehouse event LRU size %d", got)
+	}
+}
+
+func TestScopedAuthRevisionStateDoesNotGrowWithAggregateIDs(t *testing.T) {
+	j, _ := applyJournal(t, TopicsAll)
+	tenant := "33333333-3333-4333-8333-333333333333"
+	if _, stop, err := j.WatchScope(tenant, applyOrg); err != nil {
+		t.Fatal(err)
+	} else {
+		stop()
+	}
+	for i := range 8192 {
+		aggregateID := fmt.Sprintf("auth-aggregate-%d", i)
+		event := Event{EventID: fmt.Sprintf("auth-event-%d", i), Owner: "auth", Type: "auth.membership.revoked", SchemaVersion: 1, OrgID: applyOrg, AggregateID: aggregateID, AggregateRevision: int64(i + 1), Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+		if err := j.Apply(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(j.scopes[tenant].owners); got != 1 {
+		t.Fatalf("Auth revision state grew with aggregate IDs: %d entries", got)
 	}
 }
 

@@ -47,6 +47,10 @@ type fixedClient string
 
 func (c fixedClient) Client(*http.Request) string { return string(c) }
 
+type requestClient struct{}
+
+func (requestClient) Client(r *http.Request) string { return r.Header.Get("X-Test-Client") }
+
 func (a *admissionFailAuth) CSRF(context.Context, BrowserContext) (CSRFResult, error) {
 	a.calls++
 	return CSRFResult{}, nil
@@ -132,8 +136,8 @@ func TestRemoteChallengeAdmissionMatchesAuthCommandScopeAndFingerprint(t *testin
 			budgets := map[string]admission.Budget{
 				"csrf_client": {Limit: 60, Window: time.Minute, Strict: 20}, "csrf_global": {Limit: 5000, Window: 10 * time.Minute, Strict: 1500},
 				"login_client":        {Limit: 20, Window: time.Minute, Strict: 5},
-				"registration_client": {Limit: 10, Window: 10 * time.Minute, Strict: 2}, "registration_preauth": {Limit: 1, Window: 10 * time.Minute, Strict: 1}, "registration_global": {Limit: 300, Window: 10 * time.Minute, Strict: 60},
-				"reset_client":    {Limit: 10, Window: 10 * time.Minute, Strict: 2},
+				"registration_client": {Limit: 1, Window: 10 * time.Minute, Strict: 1}, "registration_preauth": {Limit: 1, Window: 10 * time.Minute, Strict: 1}, "registration_global": {Limit: 300, Window: 10 * time.Minute, Strict: 60},
+				"reset_client":    {Limit: 1, Window: 10 * time.Minute, Strict: 1},
 				"feedback_client": {Limit: 20, Window: time.Hour, Strict: 4}, "feedback_preauth": {Limit: 5, Window: 10 * time.Minute, Strict: 1}, "feedback_global": {Limit: 200, Window: time.Hour, Strict: 40},
 				"order_user": {Limit: 60, Window: time.Minute, Strict: 20}, "order_restaurant": {Limit: 600, Window: time.Minute, Strict: 200},
 				"sse_session": {Limit: 8, Strict: 4}, "sse_org": {Limit: 200, Strict: 50}, "sse_cell": {Limit: 2000, Strict: 500},
@@ -145,37 +149,48 @@ func TestRemoteChallengeAdmissionMatchesAuthCommandScopeAndFingerprint(t *testin
 			auth := &admissionFailAuth{publicErr: errors.New("Auth fixture unavailable")}
 			api, err := NewRemote(RemoteOptions{
 				Auth: auth, Mode: ModeLoopback, PublicOrigin: testOrigin, Logger: log.New(httptest.NewRecorder(), "", 0),
-				Now: time.Now, NewCommandID: func() string { return "alias-command" }, Clients: fixedClient("203.0.113.10"), Admission: serviceAdmission{service},
+				Now: time.Now, NewCommandID: func() string { return "alias-command" }, Clients: requestClient{}, Admission: serviceAdmission{service},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			body := `{"commandID":"shared-command","email":"first@umir.invalid","purpose":"` + purpose + `"}`
 			reordered := `{ "purpose":"` + purpose + `", "email":"first@umir.invalid", "commandID":"shared-command" }`
-			for i, attempt := range []struct{ body, preauth string }{{body, "preauth-a"}, {reordered, "preauth-a"}, {body, "preauth-b"}} {
-				response := serveChallenge(t, api, attempt.body, attempt.preauth)
+			attempts := []struct{ body, preauth, client string }{
+				{body, "preauth-a", "203.0.113.10"},
+				{reordered, "preauth-a", "203.0.113.11"},
+				{body, "preauth-b", "203.0.113.12"},
+			}
+			for i, attempt := range attempts {
+				response := serveChallengeFrom(t, api, attempt.body, attempt.preauth, attempt.client)
 				if response.Code != http.StatusServiceUnavailable {
 					t.Fatalf("request %d admission rejected an owner-valid retry/scope: status=%d body=%s", i, response.Code, response.Body)
 				}
 			}
-			if auth.calls != 3 {
+			fresh := strings.Replace(body, "shared-command", "fresh-command", 1)
+			response := serveChallengeFrom(t, api, fresh, "preauth-c", "203.0.113.11")
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("exact retry charged the new client dimension: status=%d body=%s", response.Code, response.Body)
+			}
+			if auth.calls != 4 {
 				t.Fatalf("accepted attempts reached Auth %d times", auth.calls)
 			}
 			changed := strings.Replace(body, "first@umir.invalid", "second@umir.invalid", 1)
-			response := serveChallenge(t, api, changed, "preauth-a")
-			if response.Code != http.StatusConflict || auth.calls != 3 {
+			response = serveChallengeFrom(t, api, changed, "preauth-a", "203.0.113.10")
+			if response.Code != http.StatusConflict || auth.calls != 4 {
 				t.Fatalf("changed input should conflict before Auth: status=%d auth_calls=%d body=%s", response.Code, auth.calls, response.Body)
 			}
 		})
 	}
 }
 
-func serveChallenge(t *testing.T, api *RemoteAPI, body, preauth string) *httptest.ResponseRecorder {
+func serveChallengeFrom(t *testing.T, api *RemoteAPI, body, preauth, client string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v2/email-challenges", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", testOrigin)
 	r.Header.Set(CSRFHeader, "csrf")
+	r.Header.Set("X-Test-Client", client)
 	r.AddCookie(&http.Cookie{Name: "umir_operator_preauth", Value: preauth})
 	w := httptest.NewRecorder()
 	api.ServeHTTP(w, r)
