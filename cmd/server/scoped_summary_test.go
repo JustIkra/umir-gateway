@@ -299,3 +299,38 @@ func TestW1SummaryMatchesOrgSummarySchemaAndMoscowInstant(t *testing.T) {
 		t.Fatalf("evaluatedAt %q is not in Europe/Moscow", result.EvaluatedAt)
 	}
 }
+
+// The byte budget is reserved before a page is read: an owner that streams far more than the budget is
+// cut at the budget instead of being read whole.
+func TestW1SummaryBudgetBoundsWhatIsReadBeforeItIsHeld(t *testing.T) {
+	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_MAX_BYTES": "1048576", "GATEWAY_SUMMARY_CONCURRENCY": "1"})
+	const total = 64 << 20
+	var mu sync.Mutex
+	written := 0
+	f.peer = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprint(total))
+		chunk := make([]byte, 64<<10)
+		for sent := 0; sent < total; sent += len(chunk) {
+			n, err := w.Write(chunk)
+			mu.Lock()
+			written += n
+			mu.Unlock()
+			if err != nil {
+				return // the Gateway stopped reading
+			}
+		}
+	}
+	w := f.request("GET", w1SummaryURL(1), "", nil)
+	result := w1DecodeSummary(t, w.Body.String())
+	if w.Code != 200 || result.Status != "unavailable" || len(result.Restaurants) != 1 || result.Restaurants[0].Error == nil || result.Restaurants[0].Error.Code != "UpstreamUnavailable" {
+		t.Fatalf("summary=%d %.300s", w.Code, w.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Logf("owner wrote %d bytes before the Gateway stopped reading", written)
+	// Reading a page whole would take 8 MiB; socket buffers add some slack to the 1 MiB budget.
+	if written >= 6<<20 {
+		t.Fatalf("the owner wrote %d bytes: the Gateway read far past a 1 MiB budget", written)
+	}
+}

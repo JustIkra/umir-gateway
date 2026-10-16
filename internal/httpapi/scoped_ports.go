@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -79,7 +80,13 @@ type BusinessRequest struct {
 	RawQuery string
 	Header   http.Header
 	Body     []byte
+	// MaxBytes, when positive, bounds the response body the client reads; a longer reply fails with
+	// ErrResponseTooLarge instead of being held in memory.
+	MaxBytes int64
 }
+
+// ErrResponseTooLarge reports a reply longer than BusinessRequest.MaxBytes.
+var ErrResponseTooLarge = errors.New("business response exceeds its byte limit")
 
 type BusinessResponse struct {
 	Status int

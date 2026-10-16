@@ -27,6 +27,9 @@ const (
 	DefaultSummaryMaxBytes    = 64 << 20
 )
 
+// summaryPageBytes is the most one owner reply may hold, as the owner client reads at most that much.
+const summaryPageBytes = 8 << 20
+
 // summaryPerRestaurant bounds one restaurant's reports inside the overall deadline.
 const summaryPerRestaurant = 5 * time.Second
 
@@ -58,15 +61,22 @@ type reservation struct {
 	taken  int64
 }
 
-func (r *reservation) take(n int) bool {
+// reserve takes up to want bytes of what is left and says how many it took; zero means the budget is spent.
+func (r *reservation) reserve(want int64) int64 {
 	r.budget.mu.Lock()
 	defer r.budget.mu.Unlock()
-	if int64(n) > r.budget.remaining {
-		return false
-	}
-	r.budget.remaining -= int64(n)
-	r.taken += int64(n)
-	return true
+	got := min(want, r.budget.remaining)
+	r.budget.remaining -= got
+	r.taken += got
+	return got
+}
+
+// giveBack returns bytes reserved but not used.
+func (r *reservation) giveBack(n int64) {
+	r.budget.mu.Lock()
+	defer r.budget.mu.Unlock()
+	r.budget.remaining += n
+	r.taken -= n
 }
 
 func (r *reservation) release() {
@@ -240,7 +250,20 @@ func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session
 		if decision.OrgID != orgID {
 			return nil, &ScopeError{Status: 403, Code: "Forbidden", Outcome: "unavailable", Message: "summary scope changed"}
 		}
-		response, err := a.options.Business.Do(ctx, BusinessRequest{Service: "warehouse", Method: http.MethodGet, Path: privateScopePath(op, tenant), RawQuery: query.Encode(), Header: scopedHeaders(r.Header, decision.Token, RequestID(r))})
+		// The bytes of a page are reserved before it is read, so the budget bounds what is held at once.
+		reserved := held.reserve(summaryPageBytes)
+		if reserved == 0 {
+			return nil, &ScopeError{Status: 503, Code: "UpstreamUnavailable", Outcome: "unavailable", Message: "summary size budget is exhausted"}
+		}
+		response, err := a.options.Business.Do(ctx, BusinessRequest{Service: "warehouse", Method: http.MethodGet, Path: privateScopePath(op, tenant), RawQuery: query.Encode(), Header: scopedHeaders(r.Header, decision.Token, RequestID(r)), MaxBytes: reserved})
+		if err == nil || errors.Is(err, ErrResponseTooLarge) {
+			held.giveBack(max(0, reserved-int64(len(response.Body))))
+		} else {
+			held.giveBack(reserved)
+		}
+		if errors.Is(err, ErrResponseTooLarge) {
+			return nil, &ScopeError{Status: 503, Code: "UpstreamUnavailable", Outcome: "unavailable", Message: "summary size budget is exhausted"}
+		}
 		a.publishChange(r, op, decision, response, err)
 		if err != nil {
 			return nil, err
@@ -260,9 +283,6 @@ func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session
 		bytesUsed += len(response.Body)
 		if bytesUsed > maxReportBytes {
 			return nil, errors.New("complete report exceeds bounded response capacity")
-		}
-		if !held.take(len(response.Body)) {
-			return nil, &ScopeError{Status: 503, Code: "UpstreamUnavailable", Outcome: "unavailable", Message: "summary size budget is exhausted"}
 		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(response.Body, &fields); err != nil {
