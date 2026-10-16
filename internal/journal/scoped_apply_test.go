@@ -290,6 +290,52 @@ func TestScopedApplyRestaurantDeletionWithoutLiveScopeIsSafe(t *testing.T) {
 	}
 }
 
+func TestScopedAuthUnrelatedRevisionDoesNotSuppressRestaurantDelete(t *testing.T) {
+	j, _ := applyJournal(t, TopicsAll)
+	tenant := "33333333-3333-4333-8333-333333333333"
+	if _, stop, err := j.WatchScope(tenant, applyOrg); err != nil {
+		t.Fatal(err)
+	} else {
+		defer stop()
+	}
+	high := Event{EventID: "settings-high", Owner: "auth", Type: "auth.organization.settings_changed", SchemaVersion: 1, OrgID: applyOrg, AggregateID: applyOrg, AggregateRevision: 100, Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+	if err := j.Apply(high); err != nil {
+		t.Fatal(err)
+	}
+	low := Event{EventID: "restaurant-delete-low", Owner: "auth", Type: "auth.restaurant.deleting", SchemaVersion: 1, OrgID: applyOrg, RestaurantID: tenant, AggregateID: tenant, AggregateRevision: 1, Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+	if err := j.Apply(low); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := j.Read(tenant, "actor", "", 0, 0)
+	if err != nil || !closed.Closed {
+		t.Fatalf("unrelated high revision suppressed restaurant deletion: %+v %v", closed, err)
+	}
+}
+
+func TestScopedAuthUnrelatedRevisionDoesNotSuppressMembershipRevocation(t *testing.T) {
+	j, _ := applyJournal(t, TopicsAll)
+	tenant := "33333333-3333-4333-8333-333333333333"
+	signals, stop, err := j.WatchScope(tenant, applyOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	high := Event{EventID: "settings-high", Owner: "auth", Type: "auth.organization.settings_changed", SchemaVersion: 1, OrgID: applyOrg, AggregateID: applyOrg, AggregateRevision: 100, Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+	if err := j.Apply(high); err != nil {
+		t.Fatal(err)
+	}
+	<-signals
+	low := Event{EventID: "membership-low", Owner: "auth", Type: "auth.membership.revoked", SchemaVersion: 1, OrgID: applyOrg, AggregateID: "11111111-1111-4111-8111-111111111111", AggregateRevision: 1, Generation: applyAuthGeneration, OccurredAt: applyOccurredAt}
+	if err := j.Apply(low); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-signals:
+	default:
+		t.Fatal("unrelated high Auth revision suppressed membership revocation wake")
+	}
+}
+
 func TestScopedEventIDLRUIsBoundedPerOwner(t *testing.T) {
 	j, _ := applyJournal(t, TopicsAll)
 	tenant := "33333333-3333-4333-8333-333333333333"
@@ -331,8 +377,8 @@ func TestScopedAuthRevisionStateDoesNotGrowWithAggregateIDs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := len(j.scopes[tenant].owners); got != 1 {
-		t.Fatalf("Auth revision state grew with aggregate IDs: %d entries", got)
+	if got := len(j.scopes[tenant].owners); got != 0 {
+		t.Fatalf("Auth notification IDs grew owner revision state: %d entries", got)
 	}
 }
 

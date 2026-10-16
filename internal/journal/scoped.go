@@ -31,13 +31,14 @@ type Snapshot struct {
 
 type scopeJournal struct {
 	// ring is allocated by the first Append and released when the scope is reset.
-	ring         []Change
-	last         int64
-	generation   uint64
-	subscribers  map[chan struct{}]struct{}
-	orgID        string
-	lastActivity time.Time
-	owners       map[string]ownerState
+	ring           []Change
+	last           int64
+	generation     uint64
+	subscribers    map[chan struct{}]struct{}
+	orgID          string
+	authGeneration string
+	lastActivity   time.Time
+	owners         map[string]ownerState
 }
 
 type CursorPosition struct {
@@ -291,7 +292,7 @@ func (s *Scoped) applyWarehouseEvent(event Event) error {
 	if j == nil || j.orgID == "" || j.orgID != event.OrgID {
 		return nil
 	}
-	ownerKey := ownerStateKey(event)
+	ownerKey := event.Owner + "\x00" + event.AggregateID
 	state := j.owners[ownerKey]
 	switch {
 	case state.generation != "" && state.generation != event.Generation:
@@ -338,8 +339,9 @@ func (s *Scoped) applyAuthEvent(event Event) error {
 	accepted := make([]string, 0, len(tenants))
 	for _, tenant := range tenants {
 		j := s.scopes[tenant]
-		state := j.owners[ownerStateKey(event)]
-		if state.generation == event.Generation && event.AggregateRevision <= state.revision {
+		key := authRevisionKey(event)
+		state, tracked := j.owners[key]
+		if j.authGeneration == event.Generation && key != "" && tracked && event.AggregateRevision <= state.revision {
 			continue
 		}
 		accepted = append(accepted, tenant)
@@ -384,20 +386,21 @@ func (s *Scoped) acceptAuthEvent(tenant string, event Event) {
 	if j == nil {
 		return
 	}
-	ownerKey := ownerStateKey(event)
-	state := j.owners[ownerKey]
-	if state.generation != "" && state.generation != event.Generation {
+	if j.authGeneration != "" && j.authGeneration != event.Generation {
 		s.resetRing(j)
 	}
-	j.owners[ownerKey] = ownerState{generation: event.Generation, revision: event.AggregateRevision, hasRevision: true}
+	j.authGeneration = event.Generation
+	if key := authRevisionKey(event); key != "" {
+		j.owners[key] = ownerState{generation: event.Generation, revision: event.AggregateRevision, hasRevision: true}
+	}
 	j.lastActivity = s.now()
 }
 
-func ownerStateKey(event Event) string {
-	if event.Owner == "auth" {
-		return event.Owner
+func authRevisionKey(event Event) string {
+	if event.Owner == "auth" && (event.Type == "auth.restaurant.deleting" || event.Type == "auth.restaurant.deleted") {
+		return "auth.restaurant"
 	}
-	return event.Owner + "\x00" + event.AggregateID
+	return ""
 }
 
 var allTopics = []string{"catalog", "stock", "menu", "orders", "analytics"}
