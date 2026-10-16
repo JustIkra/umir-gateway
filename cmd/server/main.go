@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -281,6 +283,12 @@ func main() {
 	// hash-password runs before configuration: it is used to create the bootstrap settings.
 	if len(os.Args) >= 2 && os.Args[1] == "hash-password" {
 		os.Exit(runHashPassword(os.Args[2:]))
+	}
+	// serve is the explicit name of the default command; Gateway has no database, so no migrate or
+	// generation commands exist.
+	// An option-like first argument (the test runner's flags) names no command.
+	if len(os.Args) >= 2 && !strings.HasPrefix(os.Args[1], "-") && (!slices.Contains([]string{"serve", "healthcheck", "clear-sessions"}, os.Args[1]) || len(os.Args) > 2) {
+		log.Fatal("usage: server [serve|healthcheck|hash-password|clear-sessions]")
 	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {

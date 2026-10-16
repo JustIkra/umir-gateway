@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Read the service keys from files and add the `serve` subcommand. `AUTH_SERVICE_KEY`, `AUTH_RUNTIME_SERVICE_KEY`, `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY` and `FEEDBACK_SERVICE_KEY` also accept `<NAME>_FILE` (read whole, one trailing newline dropped, at most 4096 bytes); setting both forms is a start error and no value or file content reaches an error. The variables keep working. `server serve` is an explicit synonym of the default start; any other command is refused. Gateway has no `migrate` or `generation rotate`.
+
 - Bound CI: `go test` in `make check` has `-timeout=15m`, both jobs have `timeout-minutes: 30`, and the production `live.Handler` regressions (`TestG4*`, `TestW1*`) are repeated ten times under the race detector next to the legacy `live.Streams` ones.
 
 - Send `Accept-Encoding: identity` to owners on scoped routes, so a future compressing owner cannot turn every reply into 502.

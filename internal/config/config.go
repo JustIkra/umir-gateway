@@ -4,9 +4,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -134,7 +136,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if cfg.AuthURL.Path != "" && cfg.AuthURL.Path != "/" {
 			return Config{}, errors.New("AUTH_URL: expected an origin without a path")
 		}
-		cfg.AuthServiceKey = getenv("AUTH_SERVICE_KEY")
+		if cfg.AuthServiceKey, err = serviceKey(getenv, "AUTH_SERVICE_KEY"); err != nil {
+			return Config{}, err
+		}
 		if cfg.AuthServiceKey == "" || strings.ContainsAny(cfg.AuthServiceKey, " \t\r\n") {
 			return Config{}, errors.New("AUTH_SERVICE_KEY: private transport credential is required")
 		}
@@ -147,7 +151,9 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AUTH_URL: HTTPS is required outside loopback or AUTH_ISOLATED_TEST_NETWORK=true")
 		}
 		for key, destination := range map[string]*string{"SERVING_SERVICE_KEY": &cfg.ServingServiceKey, "WAREHOUSE_SERVICE_KEY": &cfg.WarehouseServiceKey, "FEEDBACK_SERVICE_KEY": &cfg.FeedbackServiceKey} {
-			*destination = getenv(key)
+			if *destination, err = serviceKey(getenv, key); err != nil {
+				return Config{}, err
+			}
 			if *destination == "" || strings.ContainsAny(*destination, " \t\r\n") {
 				return Config{}, fmt.Errorf("%s: private transport credential is required", key)
 			}
@@ -158,7 +164,9 @@ func Load(getenv func(string) string) (Config, error) {
 				return Config{}, fmt.Errorf("%s: scoped transport requires an origin and HTTPS outside isolated tests", key)
 			}
 		}
-		cfg.AuthRuntimeServiceKey = getenv("AUTH_RUNTIME_SERVICE_KEY")
+		if cfg.AuthRuntimeServiceKey, err = serviceKey(getenv, "AUTH_RUNTIME_SERVICE_KEY"); err != nil {
+			return Config{}, err
+		}
 		if cfg.AuthRuntimeServiceKey == "" || strings.ContainsAny(cfg.AuthRuntimeServiceKey, " \t\r\n") || cfg.AuthRuntimeServiceKey == cfg.AuthServiceKey {
 			return Config{}, errors.New("AUTH_RUNTIME_SERVICE_KEY: a separate Auth-to-Gateway transport credential is required")
 		}
@@ -189,7 +197,7 @@ func Load(getenv func(string) string) (Config, error) {
 		if cfg.TrustedProxies, err = loadTrustedProxies(getenv("GATEWAY_TRUSTED_PROXY_CIDRS")); err != nil {
 			return Config{}, err
 		}
-	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
+	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_SERVICE_KEY_FILE") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
 	if cfg.Operator, err = loadOperator(getenv, value, cfg.AuthURL != nil); err != nil {
@@ -338,6 +346,32 @@ func validInstanceID(id string) bool {
 		}
 	}
 	return true
+}
+
+// maxSecretFile bounds a service key file: a key is a short token, anything bigger is a mistake.
+const maxSecretFile = 4096
+
+// serviceKey reads a service key from NAME or from the file named by NAME_FILE, never from both. The
+// file is read whole and one trailing newline is dropped. Neither the value nor the file content is
+// ever put into an error.
+func serviceKey(getenv func(string) string, name string) (string, error) {
+	direct, path := getenv(name), getenv(name+"_FILE")
+	if direct != "" && path != "" {
+		return "", fmt.Errorf("%s: set either %s or %s_FILE, not both", name, name, name)
+	}
+	if path == "" {
+		return direct, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE: the file cannot be read", name)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxSecretFile+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || len(data) > maxSecretFile {
+		return "", fmt.Errorf("%s_FILE: the file cannot be read or is larger than %d bytes", name, maxSecretFile)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), nil
 }
 
 // upstreamURL never echoes the raw value: it may carry credentials.

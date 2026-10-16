@@ -590,8 +590,11 @@ docker compose up --build -d --wait
 | `GATEWAY_SUMMARY_DEADLINE` | `20s`; общий срок сводки организации, от 1s до 29s (меньше `proxy_read_timeout` frontend); не уложившиеся рестораны получают `status: unavailable`; только режим Auth |
 | `GATEWAY_SUMMARY_CONCURRENCY` | `4`; сколько проверок доступа и ресторанов сводка обрабатывает одновременно, от 1 до 32; только режим Auth |
 | `GATEWAY_SUMMARY_MAX_BYTES` | `67108864`; сколько байт отчётов сводка держит на весь запрос, от 1048576 до 1073741824; ресторан, не уложившийся в бюджет, получает `status: unavailable`; только режим Auth |
+| `AUTH_SERVICE_KEY`, `AUTH_RUNTIME_SERVICE_KEY`, `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY`, `FEEDBACK_SERVICE_KEY` | нет; сервисные ключи режима Auth. Каждый можно передать переменной или файлом `<ИМЯ>_FILE` (файл читается целиком, завершающий перевод строки отбрасывается, до 4096 байт); обе формы сразу — ошибка запуска. Значение ключа не попадает в сообщения об ошибках и логи |
 | `TZ` в контейнере | `Europe/Moscow` |
 | `OPERATOR_*` | см. [настройки личного кабинета](#настройки) |
+
+Команда запуска: `server` без аргументов или `server serve` (явный синоним); `healthcheck`, `hash-password` и `clear-sessions` остались. У gateway нет базы, поэтому команд `migrate` и `generation rotate` нет, любая другая команда — ошибка. Sticky-маршрутизация SSE на стороне frontend (`hash` без `consistent`, C54) на настройки gateway не влияет: живая подписка хранит повтор только в памяти реплики.
 
 URL upstream принимаются только `http(s)` с хостом, без учётных данных, query и fragment; неверная настройка останавливает запуск. Переменные `HTTP_PROXY`/`HTTPS_PROXY` к upstream не применяются.
 

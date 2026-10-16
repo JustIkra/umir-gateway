@@ -2,6 +2,8 @@ package config
 
 import (
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -404,5 +406,98 @@ func TestW1SummarySettings(t *testing.T) {
 				t.Fatalf("%s=%q: %v", key, raw, err)
 			}
 		}
+	}
+}
+
+var w1KeyNames = []string{"AUTH_SERVICE_KEY", "AUTH_RUNTIME_SERVICE_KEY", "SERVING_SERVICE_KEY", "WAREHOUSE_SERVICE_KEY", "FEEDBACK_SERVICE_KEY"}
+
+// keyFile writes content to a temporary file and returns its path.
+func keyFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestW1ServiceKeyFromFile(t *testing.T) {
+	values := authValues(nil)
+	want := map[string]string{}
+	for i, name := range w1KeyNames {
+		secret := "file-secret-" + name
+		delete(values, name)
+		values[name+"_FILE"] = keyFile(t, secret+"\n")
+		want[name] = secret
+		if i == 0 { // the last newline only, and a CRLF ending, are dropped
+			values[name+"_FILE"] = keyFile(t, secret+"\r\n")
+		}
+	}
+	cfg, err := Load(env(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{"AUTH_SERVICE_KEY": cfg.AuthServiceKey, "AUTH_RUNTIME_SERVICE_KEY": cfg.AuthRuntimeServiceKey, "SERVING_SERVICE_KEY": cfg.ServingServiceKey, "WAREHOUSE_SERVICE_KEY": cfg.WarehouseServiceKey, "FEEDBACK_SERVICE_KEY": cfg.FeedbackServiceKey}
+	for name, secret := range want {
+		if got[name] != secret {
+			t.Errorf("%s from file: %q", name, got[name])
+		}
+	}
+	// The variables keep working (legacy profiles).
+	if cfg, err := Load(env(authValues(nil))); err != nil || cfg.AuthServiceKey != "gateway-auth-key" {
+		t.Fatalf("variable form: %v", err)
+	}
+	// The same rules apply to the content of a file.
+	for name, content := range map[string]string{"empty": "", "newline only": "\n", "space inside": "two words", "two lines": "a\nb\n"} {
+		values := authValues(map[string]string{"SERVING_SERVICE_KEY_FILE": keyFile(t, content)})
+		delete(values, "SERVING_SERVICE_KEY")
+		if _, err := Load(env(values)); err == nil {
+			t.Errorf("%s: invalid key file accepted", name)
+		}
+	}
+	values = authValues(map[string]string{"AUTH_SERVICE_KEY_FILE": filepath.Join(t.TempDir(), "missing")})
+	delete(values, "AUTH_SERVICE_KEY")
+	if _, err := Load(env(values)); err == nil {
+		t.Error("missing key file accepted")
+	}
+}
+
+func TestW1ServiceKeyBothSourcesIsError(t *testing.T) {
+	for _, name := range w1KeyNames {
+		values := authValues(map[string]string{name: "variable-secret", name + "_FILE": keyFile(t, "file-secret")})
+		if _, err := Load(env(values)); err == nil {
+			t.Errorf("%s: both sources accepted", name)
+		}
+	}
+}
+
+func TestW1ServiceKeyErrorDoesNotEchoSecret(t *testing.T) {
+	for _, name := range w1KeyNames {
+		for what, values := range map[string]map[string]string{
+			"both sources":  {name: "variable-secret", name + "_FILE": keyFile(t, "file-secret")},
+			"spaced file":   {name: "", name + "_FILE": keyFile(t, "file secret")},
+			"oversize file": {name: "", name + "_FILE": keyFile(t, strings.Repeat("x", 5000))},
+		} {
+			_, err := Load(env(authValues(values)))
+			if err == nil {
+				t.Fatalf("%s %s accepted", name, what)
+			}
+			for _, secret := range []string{"variable-secret", "file-secret", "file secret", "xxxx"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("%s %s: error echoes %q: %v", name, what, secret, err)
+				}
+			}
+		}
+	}
+	// A key equal to the Gateway's own Auth key is refused for the runtime key without echoing either.
+	values := authValues(map[string]string{"AUTH_RUNTIME_SERVICE_KEY": "", "AUTH_RUNTIME_SERVICE_KEY_FILE": keyFile(t, "gateway-auth-key\n")})
+	if _, err := Load(env(values)); err == nil || strings.Contains(err.Error(), "gateway-auth-key") {
+		t.Fatalf("equal runtime key: %v", err)
+	}
+}
+
+func TestW1ServiceKeyFileIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"AUTH_SERVICE_KEY_FILE": keyFile(t, "k")}))); err == nil {
+		t.Fatal("Auth settings without AUTH_URL accepted")
 	}
 }
