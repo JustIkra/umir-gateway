@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/operatorhttp"
 )
 
@@ -155,6 +156,9 @@ func (c *Client) exchange(ctx context.Context, method, path, query string, brows
 	}
 	r.Header.Set("X-Umir-Service-Key", c.key)
 	r.Header.Set("Accept", "application/json")
+	if id := httpapi.RequestIDFromContext(ctx); id != "" {
+		r.Header.Set("X-Request-ID", id)
+	}
 	if len(body) != 0 {
 		r.Header.Set("Content-Type", "application/json")
 	}

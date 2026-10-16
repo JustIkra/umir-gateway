@@ -641,6 +641,10 @@ Release repositories independently. Use annotated `vX.Y.Z` tags for actual relea
 
 Preserve unrelated local edits, stage reviewed paths and check `git diff --cached` and `git diff --check`. Tagging, publishing and shared-history rewrites require the corresponding user instruction. This standard does not create a release or change the current version.
 
+### Сквозной request ID и записи об отказах
+
+Gateway выдаёт каждому внешнему запросу новый `X-Request-ID` (присланный браузером игнорируется), возвращает его в каждом ответе, в том числе с ошибкой, и передаёт Auth и владельцам. Фоновые запуски планировщика ID не получают. На каждый отказ 502, 503 или 504 из-за Auth или владельца пишется одна JSON-запись `upstream_failure` с полями `request_id`, `owner`, `operation`, `restaurant_id`, `status`, `class` (`timeout`, `transport`, `invalid_response`, `schema`, `scope_mismatch`, `upstream_status`) и `duration_ms`; текст причины, адреса, cookie, токены, тела и IP клиента в запись не попадают.
+
 ### Временный допуск анонимной обратной связи
 
 `POST /api/v2/feedback/anonymous` проходит допуск после проверки схемы, Origin и CSRF и до запроса токена у Auth: 5 отправок на браузерный контекст за 10 минут, 20 на клиента за час (только при заданном `GATEWAY_TRUSTED_PROXY_CIDRS`) и 200 на процесс за час. Повтор уже принятой отправки (`sha256(preauth‖тело)`) не списывается; невалидное тело в бюджет не входит. Отказ: `429 RateLimited` с `Retry-After` и `details.retryAfterSeconds`. Допуск живёт в памяти процесса (`internal/admission/temporary_memory.go`, пометка `TEMPORARY`): бюджет у каждой реплики свой, файл удаляется в волне, где появляется Redis-допуск, и отдельно не выкатывается.

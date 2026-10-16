@@ -21,20 +21,27 @@ type Problem struct {
 
 type requestIDKey struct{}
 
-// WithRequestID gives every request an ID that its error responses and log lines carry.
+// WithRequestID gives every request a fresh ID, ignoring any the client sent, and returns it in the
+// X-Request-ID header of the response, errors included. Error bodies and log lines carry it too.
 func WithRequestID(next http.Handler, newID func() string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, newID())))
+		id := newID()
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id)))
 	})
 }
 
-// RequestID returns the ID set by WithRequestID, or "" outside it.
-func RequestID(r *http.Request) string {
-	if id, ok := r.Context().Value(requestIDKey{}).(string); ok {
+// RequestIDFromContext returns the request ID of ctx, or "" for work that has none, such as the
+// background scheduler.
+func RequestIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(requestIDKey{}).(string); ok {
 		return id
 	}
 	return ""
 }
+
+// RequestID returns the ID set by WithRequestID, or "" outside it.
+func RequestID(r *http.Request) string { return RequestIDFromContext(r.Context()) }
 
 // WriteProblem answers with p and the request's ID. The response is never cached.
 func WriteProblem(w http.ResponseWriter, r *http.Request, status int, p Problem) {

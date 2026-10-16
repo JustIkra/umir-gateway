@@ -58,7 +58,7 @@ func (c *ScopedClient) Do(ctx context.Context, input httpapi.BusinessRequest) (h
 	r.GetBody = nil
 	response, err := c.transport.RoundTrip(r)
 	if err != nil {
-		return httpapi.BusinessResponse{}, err
+		return httpapi.BusinessResponse{}, httpapi.Classed(httpapi.ClassTransport, err)
 	}
 	if response == nil || response.Body == nil {
 		return httpapi.BusinessResponse{}, errors.New("missing scoped response")

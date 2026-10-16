@@ -99,10 +99,13 @@ func (c *Client) scopeExchange(ctx context.Context, method, path string, input a
 	r.Header.Set("X-Umir-Service-Key", c.key)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json")
+	if id := httpapi.RequestIDFromContext(ctx); id != "" {
+		r.Header.Set("X-Request-ID", id)
+	}
 	r.GetBody = nil
 	response, err := c.transport.RoundTrip(r)
 	if err != nil {
-		return scopeUnavailable(err)
+		return scopeUnavailable(httpapi.Classed(httpapi.ClassTransport, err))
 	}
 	if response == nil || response.Body == nil {
 		return scopeUnavailable(errors.New("missing authorization response"))
@@ -146,7 +149,7 @@ func (c *Client) scopeExchange(ctx context.Context, method, path string, input a
 		return &failure
 	}
 	if err := httpapi.ValidateScopeWire(schema, data); err != nil {
-		return scopeUnavailable(err)
+		return scopeUnavailable(httpapi.Classed(httpapi.ClassSchema, err))
 	}
 	if err := json.Unmarshal(data, result); err != nil {
 		return scopeUnavailable(err)

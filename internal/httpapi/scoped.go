@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"maps"
 	"mime"
 	"net/http"
@@ -57,6 +58,8 @@ type ScopedOptions struct {
 type ScopedAPI struct {
 	options  ScopedOptions
 	contract *scopeContract
+	// failures receives one JSON record per 502, 503 or 504 caused by Auth or an owner.
+	failures *slog.Logger
 }
 
 func NewScoped(opts ScopedOptions) (*ScopedAPI, error) {
@@ -67,7 +70,7 @@ func NewScoped(opts ScopedOptions) (*ScopedAPI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ScopedAPI{options: opts, contract: c}, nil
+	return &ScopedAPI{options: opts, contract: c, failures: slog.New(slog.NewJSONHandler(opts.Logger.Writer(), nil))}, nil
 }
 
 func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +87,11 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.writeFailure(w, r, &ScopeError{Status: 400, Code: "InvalidArgument", Message: "scope path must use canonical identifiers"})
 		return
 	}
+	diag := &requestDiag{owner: "auth", operation: op.id, start: a.options.Now()}
+	if strings.Contains(op.Path, "{restaurantID}") {
+		diag.restaurantID = id
+	}
+	r = r.WithContext(context.WithValue(r.Context(), diagKey{}, diag))
 	if forbiddenScopedCredentials(r, op) {
 		a.writeFailure(w, r, &ScopeError{Status: 403, Code: "Forbidden", Message: "internal credentials are not browser inputs"})
 		return
@@ -187,7 +195,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if productID := pathValues["productID"]; productID != "" {
 		privatePath = strings.ReplaceAll(privatePath, "{productID}", productID)
 	}
-	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privatePath, RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token), Body: body}
+	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privatePath, RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token, RequestID(r)), Body: body}
 	if op.id == "appFeedback" {
 		request.Body, err = json.Marshal(struct {
 			Submission json.RawMessage `json:"submission"`
@@ -198,6 +206,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	diag.owner = op.Owner
 	response, err := a.options.Business.Do(r.Context(), request)
 	if err != nil {
 		a.publishChange(r, op, decision, response, err)
@@ -305,8 +314,10 @@ func forbiddenScopedCredentials(r *http.Request, op *scopeOperation) bool {
 	return false
 }
 
-func scopedHeaders(source http.Header, token string) http.Header {
+func scopedHeaders(source http.Header, token, requestID string) http.Header {
 	result := source.Clone()
+	// The browser's request ID is never trusted; the owner gets the one the Gateway made.
+	result.Del("X-Request-Id")
 	for key := range result {
 		lower := strings.ToLower(key)
 		if lower == "cookie" || lower == "authorization" || lower == "proxy-authorization" || lower == "x-csrf-token" || lower == "origin" || lower == "forwarded" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-user") || strings.HasPrefix(lower, "x-org") || strings.HasPrefix(lower, "x-tenant") || strings.HasPrefix(lower, "x-role") || strings.HasPrefix(lower, "x-auth") || strings.HasPrefix(lower, "x-service") || (strings.HasPrefix(lower, "x-umir-") && lower != "x-umir-runtime-epoch") {
@@ -320,6 +331,9 @@ func scopedHeaders(source http.Header, token string) http.Header {
 	}
 	for _, key := range []string{"Connection", "Keep-Alive", "Proxy-Authenticate", "TE", "Trailer", "Transfer-Encoding", "Upgrade", "Expect"} {
 		result.Del(key)
+	}
+	if requestID != "" {
+		result.Set("X-Request-ID", requestID)
 	}
 	result.Set("Authorization", "Bearer "+token)
 	result.Set("Accept", "application/json")
@@ -344,11 +358,11 @@ func privateScopePath(op *scopeOperation, id string) string {
 func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessResponse, decision AuthorizationResult, expectedEpoch string) error {
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
-		return errors.New("invalid upstream content type")
+		return Classed(ClassInvalidResponse, errors.New("invalid upstream content type"))
 	}
 	if response.Status >= 400 && response.Status <= 599 {
 		if err := ValidateScopeWire("Error", response.Body); err != nil {
-			return err
+			return Classed(ClassSchema, err)
 		}
 		var failure struct {
 			Details struct{ ScopeID string } `json:"details"`
@@ -357,7 +371,7 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 			return err
 		}
 		if scope := failure.Details.ScopeID; scope != "" && scope != decision.TenantID && scope != decision.OrgID {
-			return errors.New("error scope mismatch")
+			return Classed(ClassScopeMismatch, errors.New("error scope mismatch"))
 		}
 		return nil
 	}
@@ -366,14 +380,14 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 		expected = 201
 	}
 	if response.Status != expected {
-		return errors.New("unexpected upstream status")
+		return Classed(ClassUpstreamStatus, errors.New("unexpected upstream status"))
 	}
 	value, err := decodeScopedValues(response.Body, op.id == "supplySuggestions")
 	if err != nil {
 		return err
 	}
 	if err := op.responseValidator.Validate(value); err != nil {
-		return err
+		return Classed(ClassSchema, err)
 	}
 	if op.id != "anonymousFeedback" {
 		epoch := ""
@@ -393,7 +407,7 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 	}
 	if op.id == "anonymousFeedback" {
 		if envelope.Scope.Kind != "anonymous" || envelope.Scope.OrgID != "" || envelope.Scope.TenantID != "" || envelope.Scope.UserID != "" {
-			return errors.New("scoped anonymous result")
+			return Classed(ClassScopeMismatch, errors.New("scoped anonymous result"))
 		}
 		return nil
 	}
@@ -408,23 +422,23 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 			return err
 		}
 		if list.TenantID != decision.TenantID {
-			return errors.New("feedback list tenant mismatch")
+			return Classed(ClassScopeMismatch, errors.New("feedback list tenant mismatch"))
 		}
 		for _, item := range list.Items {
 			if item.Scope.Kind != "app" || item.Scope.OrgID != decision.OrgID || item.Scope.TenantID != decision.TenantID {
-				return errors.New("feedback item scope mismatch")
+				return Classed(ClassScopeMismatch, errors.New("feedback item scope mismatch"))
 			}
 		}
 		return nil
 	}
 	if op.id == "appFeedback" {
 		if envelope.Scope != (feedbackContext{"app", decision.UserID, decision.OrgID, decision.TenantID}) {
-			return errors.New("feedback scope mismatch")
+			return Classed(ClassScopeMismatch, errors.New("feedback scope mismatch"))
 		}
 		return nil
 	}
 	if envelope.Context.TenantID != "" && (envelope.Context.TenantID != decision.TenantID || envelope.Context.OrgID != decision.OrgID || (expectedEpoch != "" && envelope.Context.RuntimeEpoch != expectedEpoch)) {
-		return errors.New("business scope mismatch")
+		return Classed(ClassScopeMismatch, errors.New("business scope mismatch"))
 	}
 	if op.id == "supplySuggestions" || op.id == "recommendations" {
 		return validatePlanningCapture(op.id, response.Body, decision.Settings)
@@ -446,7 +460,7 @@ func validateNestedScope(value any, orgID, tenantID, epoch string) error {
 					expected = epoch
 				}
 				if !ok || text != expected {
-					return errors.New("nested scope mismatch")
+					return Classed(ClassScopeMismatch, errors.New("nested scope mismatch"))
 				}
 			}
 			if err := validateNestedScope(child, orgID, tenantID, epoch); err != nil {
@@ -501,6 +515,13 @@ func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err err
 		if r.Method == http.MethodGet {
 			copy.Outcome = "unavailable"
 		}
+	}
+	if copy.Status == http.StatusBadGateway || copy.Status == http.StatusServiceUnavailable || copy.Status == http.StatusGatewayTimeout {
+		diag := &requestDiag{owner: "auth"}
+		if known, ok := r.Context().Value(diagKey{}).(*requestDiag); ok {
+			diag = known
+		}
+		a.logFailure(r.Context(), diag.owner, diag.operation, diag.restaurantID, copy.Status, err, a.options.Now().Sub(diag.start))
 	}
 	copy.Cause = nil
 	w.Header().Set("Content-Type", "application/json")
@@ -579,4 +600,33 @@ func (a *ScopedAPI) observeRuntime(op *scopeOperation, response BusinessResponse
 	if err := a.options.Changes.ObserveRuntime(decision.TenantID, op.Owner, epoch); err != nil {
 		a.options.Logger.Print("scoped runtime observation failed")
 	}
+}
+
+// requestDiag is what a failure record needs to know about the request being served.
+type requestDiag struct {
+	owner, operation, restaurantID string
+	start                          time.Time
+}
+type diagKey struct{}
+
+// ownedError says which side a failure of a summary report came from.
+type ownedError struct {
+	owner string
+	err   error
+}
+
+func (e *ownedError) Error() string { return e.err.Error() }
+func (e *ownedError) Unwrap() error { return e.err }
+
+// logFailure writes one structured record of an upstream failure. It names the class of the cause and
+// leaves out its text, addresses, cookies, tokens, bodies and client addresses.
+func (a *ScopedAPI) logFailure(ctx context.Context, owner, operation, restaurantID string, status int, err error, took time.Duration) {
+	a.failures.LogAttrs(ctx, slog.LevelWarn, "upstream_failure",
+		slog.String("request_id", RequestIDFromContext(ctx)),
+		slog.String("owner", owner),
+		slog.String("operation", operation),
+		slog.String("restaurant_id", restaurantID),
+		slog.Int("status", status),
+		slog.String("class", FailureClass(err)),
+		slog.Int64("duration_ms", took.Milliseconds()))
 }

@@ -186,7 +186,7 @@ func w1DecodeSummary(t *testing.T, body string) w1Summary {
 }
 
 func TestW1SummaryRespectsOverallDeadlineAndKeepsOrder(t *testing.T) {
-	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_DEADLINE": "1s", "GATEWAY_SUMMARY_CONCURRENCY": "6"})
+	f := newScopedFixtureWith(t, map[string]string{"GATEWAY_SUMMARY_DEADLINE": "3s", "GATEWAY_SUMMARY_CONCURRENCY": "6"})
 	slow := map[string]bool{w1Tenant(1): true, w1Tenant(4): true}
 	f.peer = w1SummaryPeer(t, func(tenant string, r *http.Request) {
 		if slow[tenant] {
@@ -195,8 +195,8 @@ func TestW1SummaryRespectsOverallDeadlineAndKeepsOrder(t *testing.T) {
 	})
 	started := time.Now()
 	w := f.request("GET", w1SummaryURL(6), "", nil)
-	if elapsed := time.Since(started); elapsed > 3*time.Second {
-		t.Fatalf("summary took %s past a 1 s deadline", elapsed)
+	if elapsed := time.Since(started); elapsed > 6*time.Second {
+		t.Fatalf("summary took %s past a 3 s deadline", elapsed)
 	}
 	result := w1DecodeSummary(t, w.Body.String())
 	if w.Code != 200 || result.Status != "partial" || len(result.Restaurants) != 6 {

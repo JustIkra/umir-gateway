@@ -187,6 +187,11 @@ func (a *ScopedAPI) summaryItem(ctx context.Context, r *http.Request, session, o
 		return scopeSummaryItem{RestaurantID: tenant, Status: "ok", Stock: stock, Movements: movements}
 	}
 	held.release()
+	owner := "warehouse"
+	var owned *ownedError
+	if errors.As(err, &owned) {
+		owner = owned.owner
+	}
 	var failure *ScopeError
 	if !errors.As(err, &failure) {
 		failure = upstreamUnavailable(http.MethodGet, err)
@@ -195,6 +200,13 @@ func (a *ScopedAPI) summaryItem(ctx context.Context, r *http.Request, session, o
 	copy.Status = 0
 	copy.Cause = nil
 	copy.Outcome = "unavailable"
+	if failure.Status == 0 || failure.Status >= 502 && failure.Status <= 504 {
+		status := failure.Status
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		a.logFailure(ctx, owner, "analyticsSummary", tenant, status, err, 0)
+	}
 	return scopeSummaryItem{RestaurantID: tenant, Status: "unavailable", Error: &copy}
 }
 
@@ -223,12 +235,12 @@ func (a *ScopedAPI) completeReport(ctx context.Context, r *http.Request, session
 		}
 		decision, err := a.authorize(ctx, op, tenant, session, activity(r))
 		if err != nil {
-			return nil, err
+			return nil, &ownedError{"auth", err}
 		}
 		if decision.OrgID != orgID {
 			return nil, &ScopeError{Status: 403, Code: "Forbidden", Outcome: "unavailable", Message: "summary scope changed"}
 		}
-		response, err := a.options.Business.Do(ctx, BusinessRequest{Service: "warehouse", Method: http.MethodGet, Path: privateScopePath(op, tenant), RawQuery: query.Encode(), Header: scopedHeaders(r.Header, decision.Token)})
+		response, err := a.options.Business.Do(ctx, BusinessRequest{Service: "warehouse", Method: http.MethodGet, Path: privateScopePath(op, tenant), RawQuery: query.Encode(), Header: scopedHeaders(r.Header, decision.Token, RequestID(r))})
 		a.publishChange(r, op, decision, response, err)
 		if err != nil {
 			return nil, err

@@ -32,6 +32,9 @@ type scopedFixture struct {
 	handler        http.Handler
 	// anonymousTokens counts the anonymous feedback tokens Auth issued.
 	anonymousTokens int
+	// authRequestIDs are the X-Request-ID values Auth saw; authHook may take over an Auth request.
+	authRequestIDs []string
+	authHook       func(http.ResponseWriter, *http.Request) bool
 }
 
 func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
@@ -42,11 +45,21 @@ func newScopedFixture(t *testing.T, closeFailure ...bool) *scopedFixture {
 // newScopedFixtureWith adds settings to the Gateway configuration.
 func newScopedFixtureWith(t *testing.T, extra map[string]string, closeFailure ...bool) *scopedFixture {
 	t.Helper()
+	return newScopedFixtureLogged(t, extra, io.Discard, closeFailure...)
+}
+
+// newScopedFixtureLogged also sends the Gateway log to logs.
+func newScopedFixtureLogged(t *testing.T, extra map[string]string, logs io.Writer, closeFailure ...bool) *scopedFixture {
+	t.Helper()
 	f := &scopedFixture{}
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		f.authRequestIDs = append(f.authRequestIDs, r.Header.Get("X-Request-ID"))
+		if f.authHook != nil && f.authHook(w, r) {
+			return
+		}
 		if r.Header.Get("X-Umir-Service-Key") != "auth-key" {
 			t.Error("wrong Auth key")
 		}
@@ -112,7 +125,7 @@ func newScopedFixtureWith(t *testing.T, extra map[string]string, closeFailure ..
 	for key, value := range extra {
 		values[key] = value
 	}
-	app, err := newComponents(loadConfig(t, values), log.New(io.Discard, "", 0))
+	app, err := newComponents(loadConfig(t, values), log.New(logs, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
