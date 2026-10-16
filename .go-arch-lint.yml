@@ -24,6 +24,8 @@ components:
   journal: {in: "internal/journal/**"}
   live: {in: "internal/live/**"}
   expiration: {in: "internal/expiration/**"}
+  clientaddr: {in: "internal/clientaddr/**"}
+  admission: {in: "internal/admission/**"}
   fixture-server: {in: "tests/fixtures/server/**"}
   fixture-control: {in: "tests/fixtures/control/**"}
   fixture-catalog: {in: "tests/fixtures/catalog/**"}
@@ -49,7 +51,7 @@ deps:
   bootstrap:
     mayDependOn: [bootstrap, transport, proxy]
   process:
-    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor]
+    mayDependOn: [process, config, httpapi, upstream, bootstrap, transport, proxy, operator, passwordhash, accountfile, operatorhttp, authclient, journal, live, expiration, livecursor, clientaddr, admission]
     canUse: [x-term]
   testsupport:
     mayDependOn: [testsupport]
@@ -64,7 +66,7 @@ deps:
   accountfile:
     mayDependOn: [accountfile, operator, strictjson]
   operatorhttp:
-    mayDependOn: [operatorhttp, operator, httpapi, strictjson]
+    mayDependOn: [operatorhttp, operator, httpapi, strictjson, clientaddr]
     canUse: [jsonschema]
   livecursor:
     mayDependOn: [livecursor, journal]
@@ -72,6 +74,10 @@ deps:
     mayDependOn: [authclient, operatorhttp, strictjson, httpapi, expiration]
   strictjson:
     mayDependOn: [strictjson]
+  clientaddr:
+    mayDependOn: [clientaddr]
+  admission:
+    mayDependOn: [admission]
   journal:
     mayDependOn: [journal]
   live:

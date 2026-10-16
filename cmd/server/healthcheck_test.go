@@ -4,8 +4,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/JustIkra/umir-gateway/internal/config"
 )
 
 type healthTransport struct {
@@ -31,7 +35,7 @@ func TestHealthcheckRetainsCleanupFailure(t *testing.T) {
 			original := http.DefaultTransport
 			http.DefaultTransport = healthTransport{status: status, err: closeErr}
 			t.Cleanup(func() { http.DefaultTransport = original })
-			err := healthcheck("8080")
+			err := healthcheck("8080", "/healthz")
 			if !errors.Is(err, closeErr) {
 				t.Fatalf("cleanup failure was lost: %v", err)
 			}
@@ -39,5 +43,25 @@ func TestHealthcheckRetainsCleanupFailure(t *testing.T) {
 				t.Fatalf("HTTP failure was lost: %v", err)
 			}
 		})
+	}
+}
+
+func TestW1HealthcheckProbesReadyzInAuthModeAndHealthzInLegacy(t *testing.T) {
+	var paths []string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { paths = append(paths, r.URL.Path) }))
+	defer peer.Close()
+	target, err := url.Parse(peer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := loadConfig(t, map[string]string{"OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin, "OPERATOR_STORE_PATH": "/data/operator/account.json"})
+	auth := loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin})
+	for _, cfg := range []config.Config{auth, legacy} {
+		if err := healthcheck(target.Port(), healthPath(cfg)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(paths) != 2 || paths[0] != "/readyz" || paths[1] != "/healthz" {
+		t.Fatalf("probed %v", paths)
 	}
 }

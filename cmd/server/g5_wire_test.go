@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/expiration"
 )
 
 func g5Signed(t *testing.T, key ed25519.PrivateKey, tenant, epoch, operation, subject, caller string, permissions []string) string {
@@ -116,6 +118,7 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	defer peer.Close()
 	cfg := loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin})
 	cfg.ExpirationRunInterval = 20 * time.Millisecond
+	cfg.RegistryRefreshInterval = 20 * time.Millisecond
 	app, err := newComponents(cfg, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +138,10 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); app.expiry.Run(ctx) }()
+	var loops sync.WaitGroup
+	loops.Go(func() { app.refresher.Run(ctx) })
+	loops.Go(func() { app.expiry.Run(ctx) })
+	go func() { defer close(done); loops.Wait() }()
 	defer func() {
 		cancel()
 		select {
@@ -177,10 +183,39 @@ func TestG5SchedulerWireFailuresAndRecovery(t *testing.T) {
 	await("ready")
 	mu.Lock()
 	mode = "deleted"
+	mu.Unlock()
+	// The scheduler reads the refresher's snapshot, so an iteration that began before the deleted
+	// registry was stored may still dispatch. The refresher is sequential: the third read starts only
+	// after the second one stored its snapshot, so the snapshot is deleting once the third is served.
+	await("deleted")
+	await("deleted")
+	await("deleted")
+	// Iterations never overlap. One that started after this point sees the deleted snapshot, and
+	// the first start different from the one in flight proves the in-flight iteration ended.
+	runner, ok := app.expiry.(*expiration.ScopedRunner)
+	if !ok {
+		t.Fatal("scheduler type")
+	}
+	inFlight := runner.Health().LastStart
+	awaitIteration := func(after time.Time) time.Time {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			h := runner.Health()
+			if h.LastStart.After(after) && !h.LastSuccess.Before(h.LastStart) {
+				return h.LastStart
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("scheduler iteration did not complete")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	first := awaitIteration(inFlight)
+	mu.Lock()
 	before := runs
 	mu.Unlock()
-	await("deleted")
-	await("deleted")
+	awaitIteration(first)
 	mu.Lock()
 	defer mu.Unlock()
 	if runs != before || tokens < runs || runs < 2 {

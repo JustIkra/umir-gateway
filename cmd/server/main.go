@@ -11,6 +11,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -72,6 +75,7 @@ type components struct {
 	scopedStreams  *live.Handler
 	streams        *live.Streams
 	expiry         interface{ Run(context.Context) }
+	refresher      interface{ Run(context.Context) }
 }
 
 // newComponents assembles the gateway from cfg. Nothing runs yet: the process serves handler and
@@ -251,9 +255,18 @@ func run(ctx context.Context, server *http.Server, listener net.Listener, grace 
 	return errors.Join(shutdownErr, serveErr)
 }
 
-func healthcheck(port string) (result error) {
+// healthPath is the path the image healthcheck probes: the Auth mode answers capability readiness,
+// the legacy mode only liveness.
+func healthPath(cfg config.Config) string {
+	if cfg.AuthURL != nil {
+		return "/readyz"
+	}
+	return "/healthz"
+}
+
+func healthcheck(port, path string) (result error) {
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	response, err := client.Get("http://127.0.0.1:" + port + path)
 	if err != nil {
 		return err
 	}
@@ -266,10 +279,32 @@ func healthcheck(port string) (result error) {
 	return nil
 }
 
+// checkCommand accepts no arguments or one of serve (the explicit name of the default start),
+// healthcheck and clear-sessions; hash-password is handled before it. Gateway has no database, so there
+// are no migrate or generation commands, and a typo must not start the server. Only the test child,
+// which the Go test runner starts with its own -test.* flags, may carry such options.
+func checkCommand(args []string, testChild bool) error {
+	usage := errors.New("usage: server [serve|healthcheck|hash-password|clear-sessions]")
+	rest := args[1:]
+	if testChild {
+		rest = slices.DeleteFunc(slices.Clone(rest), func(a string) bool { return strings.HasPrefix(a, "-test.") })
+	}
+	if len(rest) == 0 {
+		return nil
+	}
+	if len(rest) > 1 || !slices.Contains([]string{"serve", "healthcheck", "clear-sessions"}, rest[0]) {
+		return usage
+	}
+	return nil
+}
+
 func main() {
 	// hash-password runs before configuration: it is used to create the bootstrap settings.
 	if len(os.Args) >= 2 && os.Args[1] == "hash-password" {
 		os.Exit(runHashPassword(os.Args[2:]))
+	}
+	if err := checkCommand(os.Args, os.Getenv("UMIR_GATEWAY_TEST_CHILD") == "1"); err != nil {
+		log.Fatal(err)
 	}
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
@@ -285,7 +320,7 @@ func main() {
 		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
-		if err := healthcheck(cfg.Port); err != nil {
+		if err := healthcheck(cfg.Port, healthPath(cfg)); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -302,13 +337,18 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("umir-gateway listening on %s", server.Addr)
-	// The process owns the expiration runs: they stop with the signal and finish before it exits.
+	// The process owns the background loops, the registry refresher and the expiration runs: they stop
+	// with the signal and finish before it exits.
 	runs := make(chan struct{})
 	go func() {
 		defer close(runs)
-		if app.expiry != nil {
-			app.expiry.Run(signals)
+		var loops sync.WaitGroup
+		for _, loop := range []interface{ Run(context.Context) }{app.refresher, app.expiry} {
+			if loop != nil {
+				loops.Go(func() { loop.Run(signals) })
+			}
 		}
+		loops.Wait()
 	}()
 	if app.privateHandler != nil {
 		privateServer := &http.Server{Addr: net.JoinHostPort(cfg.PrivateListenHost, cfg.PrivatePort), Handler: app.privateHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

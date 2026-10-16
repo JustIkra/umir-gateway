@@ -58,16 +58,22 @@ func (c *ScopedClient) Do(ctx context.Context, input httpapi.BusinessRequest) (h
 	r.GetBody = nil
 	response, err := c.transport.RoundTrip(r)
 	if err != nil {
-		return httpapi.BusinessResponse{}, err
+		return httpapi.BusinessResponse{}, httpapi.Classed(httpapi.ClassTransport, err)
 	}
 	if response == nil || response.Body == nil {
 		return httpapi.BusinessResponse{}, errors.New("missing scoped response")
 	}
 	result := httpapi.BusinessResponse{Status: response.StatusCode, Header: response.Header.Clone()}
-	const limit = 8 << 20
+	limit := int64(8 << 20)
+	if input.MaxBytes > 0 {
+		limit = min(limit, input.MaxBytes)
+	}
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil || len(data) > limit {
+	if int64(len(data)) > limit && input.MaxBytes > 0 && limit == input.MaxBytes {
+		return result, errors.Join(closeErr, httpapi.ErrResponseTooLarge)
+	}
+	if readErr != nil || closeErr != nil || int64(len(data)) > limit {
 		return result, errors.Join(readErr, closeErr, errors.New("scoped response unavailable"))
 	}
 	result.Body = data

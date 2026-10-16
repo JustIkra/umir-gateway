@@ -20,13 +20,20 @@ type RemoteOptions struct {
 	Logger       *log.Logger
 	Now          func() time.Time
 	NewCommandID func() string
+	// Clients tells which client a request comes from, for the limits kept per client; nil means the
+	// peer address.
+	Clients ClientResolver
 }
+
+// ClientResolver names the client of a request.
+type ClientResolver interface{ Client(*http.Request) string }
 
 type RemoteAPI struct {
 	boundary     *API
 	auth         AuthClient
 	newCommandID func() string
 	registration *registrationLimits
+	clients      ClientResolver
 }
 
 func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
@@ -42,7 +49,7 @@ func NewRemote(opts RemoteOptions) (*RemoteAPI, error) {
 	default:
 		return nil, errors.New("operatorhttp: cookie mode and public origin do not match")
 	}
-	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID, registration: &registrationLimits{}}, nil
+	return &RemoteAPI{boundary: a, auth: opts.Auth, newCommandID: opts.NewCommandID, registration: &registrationLimits{}, clients: opts.Clients}, nil
 }
 
 func (a *RemoteAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

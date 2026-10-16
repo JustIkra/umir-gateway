@@ -20,18 +20,21 @@ type AccessChecker interface {
 }
 
 type ScopedOptions struct {
-	Auth              AccessChecker
-	Journal           *journal.Scoped
-	Clock             Clock
-	PerSession, Total int
-	WriteTimeout      time.Duration
-	Logger            *log.Logger
+	Auth    AccessChecker
+	Journal *journal.Scoped
+	Clock   Clock
+	// PerSession bounds the streams of one session, PerOrg those of one organization and Total those of
+	// the process.
+	PerSession, PerOrg, Total int
+	WriteTimeout              time.Duration
+	Logger                    *log.Logger
 }
 
 type Handler struct {
 	opts    ScopedOptions
 	mu      sync.Mutex
 	open    map[string]int
+	openOrg map[string]int
 	total   int
 	closing context.Context
 	cancel  context.CancelFunc
@@ -39,11 +42,11 @@ type Handler struct {
 }
 
 func NewHandler(opts ScopedOptions) (*Handler, error) {
-	if opts.Auth == nil || opts.Journal == nil || opts.Clock == nil || opts.Logger == nil || opts.PerSession <= 0 || opts.Total <= 0 || opts.WriteTimeout <= 0 {
+	if opts.Auth == nil || opts.Journal == nil || opts.Clock == nil || opts.Logger == nil || opts.PerSession <= 0 || opts.PerOrg <= 0 || opts.Total <= 0 || opts.WriteTimeout <= 0 {
 		return nil, errors.New("live: scoped dependencies and bounds are required")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Handler{opts: opts, open: map[string]int{}, closing: ctx, cancel: cancel}, nil
+	return &Handler{opts: opts, open: map[string]int{}, openOrg: map[string]int{}, closing: ctx, cancel: cancel}, nil
 }
 
 func (h *Handler) Close() {
@@ -74,6 +77,27 @@ func (h *Handler) release(key string) {
 		delete(h.open, key)
 	}
 	h.done.Done()
+}
+
+// acquireOrg takes a slot of the organization the first access decision names. The session and total
+// slots are already held; a refusal leaves them to the caller's release.
+func (h *Handler) acquireOrg(org string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing.Err() != nil || h.openOrg[org] >= h.opts.PerOrg {
+		return false
+	}
+	h.openOrg[org]++
+	return true
+}
+
+func (h *Handler) releaseOrg(org string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.openOrg[org]--
+	if h.openOrg[org] <= 0 {
+		delete(h.openOrg, org)
+	}
 }
 
 func (h *Handler) check(ctx context.Context, tenant, session, org string) (httpapi.RestaurantAccess, error) {
@@ -136,6 +160,11 @@ func (h *Handler) ServeScope(w http.ResponseWriter, r *http.Request, tenant, ses
 		h.refuse(w, err)
 		return
 	}
+	if !h.acquireOrg(access.OrgID) {
+		scopedRefusal(w, http.StatusTooManyRequests, "RateLimited", 1)
+		return
+	}
+	defer h.releaseOrg(access.OrgID)
 	signals, stop, err := h.opts.Journal.Watch(tenant)
 	if err != nil {
 		scopedFailure(w, 503, "UpstreamUnavailable")

@@ -61,7 +61,7 @@ func TestG4IdleCheckIncludesWriteLatency(t *testing.T) {
 				cursor = g4ReplayCursor(t, j)
 			}
 			a := &g4TimedChecker{times: make(chan time.Time, 20), denied: true}
-			h, err := NewHandler(ScopedOptions{Auth: a, Journal: j, Clock: SystemClock{}, PerSession: 1, Total: 1, WriteTimeout: 5 * time.Second, Logger: log.New(io.Discard, "", 0)})
+			h, err := NewHandler(ScopedOptions{Auth: a, Journal: j, Clock: SystemClock{}, PerSession: 1, Total: 1, PerOrg: 1, WriteTimeout: 5 * time.Second, Logger: log.New(io.Discard, "", 0)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestG4BlockedInitialFramesHaveCutoffDeadline(t *testing.T) {
 				cursor = g4ReplayCursor(t, j)
 			}
 			a := &g4TimedChecker{times: make(chan time.Time, 20)}
-			h, err := NewHandler(ScopedOptions{Auth: a, Journal: j, Clock: SystemClock{}, PerSession: 1, Total: 1, WriteTimeout: 8 * time.Second, Logger: log.New(io.Discard, "", 0)})
+			h, err := NewHandler(ScopedOptions{Auth: a, Journal: j, Clock: SystemClock{}, PerSession: 1, Total: 1, PerOrg: 1, WriteTimeout: 8 * time.Second, Logger: log.New(io.Discard, "", 0)})
 			if err != nil {
 				t.Fatal(err)
 			}

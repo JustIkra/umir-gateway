@@ -50,6 +50,10 @@ func (c *Client) AnonymousToken(ctx context.Context) (httpapi.ScopeToken, error)
 }
 
 func (c *Client) CheckCSRF(ctx context.Context, session, preauth, token string) error {
+	if session == "" && preauth == "" {
+		// Auth would issue a new preauth record for the empty context only to see the token refused.
+		return &httpapi.ScopeError{Status: 403, Code: "InvalidCsrfToken", Outcome: "not_committed", Message: "invalid CSRF token"}
+	}
 	result, err := c.CSRF(ctx, operatorhttp.BrowserContext{SessionToken: session, PreauthToken: preauth, Activity: "background"})
 	if err != nil {
 		var failure *operatorhttp.AuthFailure
@@ -95,10 +99,13 @@ func (c *Client) scopeExchange(ctx context.Context, method, path string, input a
 	r.Header.Set("X-Umir-Service-Key", c.key)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json")
+	if id := httpapi.RequestIDFromContext(ctx); id != "" {
+		r.Header.Set("X-Request-ID", id)
+	}
 	r.GetBody = nil
 	response, err := c.transport.RoundTrip(r)
 	if err != nil {
-		return scopeUnavailable(err)
+		return scopeUnavailable(httpapi.Classed(httpapi.ClassTransport, err))
 	}
 	if response == nil || response.Body == nil {
 		return scopeUnavailable(errors.New("missing authorization response"))
@@ -142,7 +149,7 @@ func (c *Client) scopeExchange(ctx context.Context, method, path string, input a
 		return &failure
 	}
 	if err := httpapi.ValidateScopeWire(schema, data); err != nil {
-		return scopeUnavailable(err)
+		return scopeUnavailable(httpapi.Classed(httpapi.ClassSchema, err))
 	}
 	if err := json.Unmarshal(data, result); err != nil {
 		return scopeUnavailable(err)

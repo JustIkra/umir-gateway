@@ -22,6 +22,7 @@ import (
 const (
 	DefaultPerSession   = 8
 	DefaultTotal        = 64
+	DefaultPerOrg       = 32
 	DefaultPing         = 15 * time.Second
 	DefaultWriteTimeout = 5 * time.Second
 )

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
+	"maps"
 	"mime"
 	"net/http"
 	"slices"
@@ -24,20 +26,42 @@ type ScopedChanges interface {
 	ObserveRuntime(string, string, string) error
 }
 
+// AnonymousAdmission limits the submissions of anonymous feedback before Auth is asked for a token. It
+// returns how long the caller should wait, zero when the attempt is admitted. A repeat of an admitted
+// submission is not charged again.
+type AnonymousAdmission interface {
+	Admit(preauth, client string, body []byte, now time.Time) time.Duration
+}
+
+// ClientResolver names the client of a request for per-client budgets.
+type ClientResolver interface{ Client(*http.Request) string }
+
 type ScopedOptions struct {
-	Live          ScopedLive
-	Changes       ScopedChanges
-	Auth          ScopedAuth
-	Business      BusinessClient
-	Origin        string
-	SecureCookies bool
-	Now           func() time.Time
-	Logger        *log.Logger
+	// Admission and Clients are optional: without Admission anonymous feedback is not limited here.
+	Admission AnonymousAdmission
+	Clients   ClientResolver
+	// SummaryDeadline, SummaryConcurrency and SummaryMaxBytes bound one organization summary; zero
+	// values mean the Default* constants.
+	// BodyTimeout bounds reading a request body on every route except the live stream; zero means no bound.
+	BodyTimeout        time.Duration
+	SummaryDeadline    time.Duration
+	SummaryConcurrency int
+	SummaryMaxBytes    int64
+	Live               ScopedLive
+	Changes            ScopedChanges
+	Auth               ScopedAuth
+	Business           BusinessClient
+	Origin             string
+	SecureCookies      bool
+	Now                func() time.Time
+	Logger             *log.Logger
 }
 
 type ScopedAPI struct {
 	options  ScopedOptions
 	contract *scopeContract
+	// failures receives one JSON record per 502, 503 or 504 caused by Auth or an owner.
+	failures *slog.Logger
 }
 
 func NewScoped(opts ScopedOptions) (*ScopedAPI, error) {
@@ -48,7 +72,7 @@ func NewScoped(opts ScopedOptions) (*ScopedAPI, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ScopedAPI{options: opts, contract: c}, nil
+	return &ScopedAPI{options: opts, contract: c, failures: slog.New(slog.NewJSONHandler(opts.Logger.Writer(), nil))}, nil
 }
 
 func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +89,11 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.writeFailure(w, r, &ScopeError{Status: 400, Code: "InvalidArgument", Message: "scope path must use canonical identifiers"})
 		return
 	}
+	diag := &requestDiag{owner: "auth", operation: op.id, start: a.options.Now()}
+	if strings.Contains(op.Path, "{restaurantID}") {
+		diag.restaurantID = id
+	}
+	r = r.WithContext(context.WithValue(r.Context(), diagKey{}, diag))
 	if forbiddenScopedCredentials(r, op) {
 		a.writeFailure(w, r, &ScopeError{Status: 403, Code: "Forbidden", Message: "internal credentials are not browser inputs"})
 		return
@@ -73,7 +102,22 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if op.Owner == "feedback" {
 		limit = 16 << 10
 	}
+	controller := http.NewResponseController(w)
+	if op.id != "live" && a.options.BodyTimeout > 0 {
+		// A stalled sender must not hold the handler open: http.Server.ReadTimeout would also cut SSE.
+		// A writer without deadline support (a test recorder) is simply not bounded.
+		if err := controller.SetReadDeadline(a.options.Now().Add(a.options.BodyTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			a.options.Logger.Printf("scoped body deadline failed")
+		}
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	// After a failed read the deadline stays: the server drains the unread body before it answers and
+	// must not wait for a sender that stopped.
+	if err == nil && op.id != "live" && a.options.BodyTimeout > 0 {
+		if clearErr := controller.SetReadDeadline(time.Time{}); clearErr != nil && !errors.Is(clearErr, http.ErrNotSupported) {
+			a.options.Logger.Printf("scoped body deadline reset failed")
+		}
+	}
 	if err != nil {
 		a.writeFailure(w, r, &ScopeError{Status: 400, Code: "InvalidArgument", Message: "request body is unavailable or too large"})
 		return
@@ -140,6 +184,11 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var decision AuthorizationResult
 	var token string
 	if op.id == "anonymousFeedback" {
+		if wait := a.admitAnonymous(r, session, preauth, body); wait > 0 {
+			seconds := max(1, int((wait+time.Second-1)/time.Second))
+			a.writeFailure(w, r, &ScopeError{Status: 429, Code: "RateLimited", Outcome: "not_committed", Message: "too many submissions, try later", Retryable: true, RetryAfter: seconds})
+			return
+		}
 		value, err := a.options.Auth.AnonymousToken(r.Context())
 		if err != nil {
 			a.writeFailure(w, r, err)
@@ -163,7 +212,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if productID := pathValues["productID"]; productID != "" {
 		privatePath = strings.ReplaceAll(privatePath, "{productID}", productID)
 	}
-	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privatePath, RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token), Body: body}
+	request := BusinessRequest{Service: op.Owner, Method: r.Method, Path: privatePath, RawQuery: r.URL.RawQuery, Header: scopedHeaders(r.Header, token, RequestID(r)), Body: body}
 	if op.id == "appFeedback" {
 		request.Body, err = json.Marshal(struct {
 			Submission json.RawMessage `json:"submission"`
@@ -174,6 +223,7 @@ func (a *ScopedAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	diag.owner = op.Owner
 	response, err := a.options.Business.Do(r.Context(), request)
 	if err != nil {
 		a.publishChange(r, op, decision, response, err)
@@ -281,8 +331,10 @@ func forbiddenScopedCredentials(r *http.Request, op *scopeOperation) bool {
 	return false
 }
 
-func scopedHeaders(source http.Header, token string) http.Header {
+func scopedHeaders(source http.Header, token, requestID string) http.Header {
 	result := source.Clone()
+	// The browser's request ID is never trusted; the owner gets the one the Gateway made.
+	result.Del("X-Request-Id")
 	for key := range result {
 		lower := strings.ToLower(key)
 		if lower == "cookie" || lower == "authorization" || lower == "proxy-authorization" || lower == "x-csrf-token" || lower == "origin" || lower == "forwarded" || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-user") || strings.HasPrefix(lower, "x-org") || strings.HasPrefix(lower, "x-tenant") || strings.HasPrefix(lower, "x-role") || strings.HasPrefix(lower, "x-auth") || strings.HasPrefix(lower, "x-service") || (strings.HasPrefix(lower, "x-umir-") && lower != "x-umir-runtime-epoch") {
@@ -297,8 +349,13 @@ func scopedHeaders(source http.Header, token string) http.Header {
 	for _, key := range []string{"Connection", "Keep-Alive", "Proxy-Authenticate", "TE", "Trailer", "Transfer-Encoding", "Upgrade", "Expect"} {
 		result.Del(key)
 	}
+	if requestID != "" {
+		result.Set("X-Request-ID", requestID)
+	}
 	result.Set("Authorization", "Bearer "+token)
 	result.Set("Accept", "application/json")
+	// A compressed owner reply would fail JSON validation and turn into 502.
+	result.Set("Accept-Encoding", "identity")
 	return result
 }
 
@@ -320,11 +377,11 @@ func privateScopePath(op *scopeOperation, id string) string {
 func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessResponse, decision AuthorizationResult, expectedEpoch string) error {
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
-		return errors.New("invalid upstream content type")
+		return Classed(ClassInvalidResponse, errors.New("invalid upstream content type"))
 	}
 	if response.Status >= 400 && response.Status <= 599 {
 		if err := ValidateScopeWire("Error", response.Body); err != nil {
-			return err
+			return Classed(ClassSchema, err)
 		}
 		var failure struct {
 			Details struct{ ScopeID string } `json:"details"`
@@ -333,7 +390,7 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 			return err
 		}
 		if scope := failure.Details.ScopeID; scope != "" && scope != decision.TenantID && scope != decision.OrgID {
-			return errors.New("error scope mismatch")
+			return Classed(ClassScopeMismatch, errors.New("error scope mismatch"))
 		}
 		return nil
 	}
@@ -342,14 +399,14 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 		expected = 201
 	}
 	if response.Status != expected {
-		return errors.New("unexpected upstream status")
+		return Classed(ClassUpstreamStatus, errors.New("unexpected upstream status"))
 	}
 	value, err := decodeScopedValues(response.Body, op.id == "supplySuggestions")
 	if err != nil {
 		return err
 	}
 	if err := op.responseValidator.Validate(value); err != nil {
-		return err
+		return Classed(ClassSchema, err)
 	}
 	if op.id != "anonymousFeedback" {
 		epoch := ""
@@ -369,7 +426,7 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 	}
 	if op.id == "anonymousFeedback" {
 		if envelope.Scope.Kind != "anonymous" || envelope.Scope.OrgID != "" || envelope.Scope.TenantID != "" || envelope.Scope.UserID != "" {
-			return errors.New("scoped anonymous result")
+			return Classed(ClassScopeMismatch, errors.New("scoped anonymous result"))
 		}
 		return nil
 	}
@@ -384,23 +441,23 @@ func (a *ScopedAPI) validateResponse(op *scopeOperation, response BusinessRespon
 			return err
 		}
 		if list.TenantID != decision.TenantID {
-			return errors.New("feedback list tenant mismatch")
+			return Classed(ClassScopeMismatch, errors.New("feedback list tenant mismatch"))
 		}
 		for _, item := range list.Items {
 			if item.Scope.Kind != "app" || item.Scope.OrgID != decision.OrgID || item.Scope.TenantID != decision.TenantID {
-				return errors.New("feedback item scope mismatch")
+				return Classed(ClassScopeMismatch, errors.New("feedback item scope mismatch"))
 			}
 		}
 		return nil
 	}
 	if op.id == "appFeedback" {
 		if envelope.Scope != (feedbackContext{"app", decision.UserID, decision.OrgID, decision.TenantID}) {
-			return errors.New("feedback scope mismatch")
+			return Classed(ClassScopeMismatch, errors.New("feedback scope mismatch"))
 		}
 		return nil
 	}
 	if envelope.Context.TenantID != "" && (envelope.Context.TenantID != decision.TenantID || envelope.Context.OrgID != decision.OrgID || (expectedEpoch != "" && envelope.Context.RuntimeEpoch != expectedEpoch)) {
-		return errors.New("business scope mismatch")
+		return Classed(ClassScopeMismatch, errors.New("business scope mismatch"))
 	}
 	if op.id == "supplySuggestions" || op.id == "recommendations" {
 		return validatePlanningCapture(op.id, response.Body, decision.Settings)
@@ -422,7 +479,7 @@ func validateNestedScope(value any, orgID, tenantID, epoch string) error {
 					expected = epoch
 				}
 				if !ok || text != expected {
-					return errors.New("nested scope mismatch")
+					return Classed(ClassScopeMismatch, errors.New("nested scope mismatch"))
 				}
 			}
 			if err := validateNestedScope(child, orgID, tenantID, epoch); err != nil {
@@ -451,6 +508,21 @@ func upstreamUnavailable(method string, cause error) *ScopeError {
 	return &ScopeError{Status: status, Code: "UpstreamUnavailable", Outcome: outcome, Message: "upstream response is unavailable", Cause: cause}
 }
 
+// admitAnonymous asks the admission port about one validated, CSRF-checked submission.
+func (a *ScopedAPI) admitAnonymous(r *http.Request, session, preauth string, body []byte) time.Duration {
+	if a.options.Admission == nil {
+		return 0
+	}
+	client := ""
+	if a.options.Clients != nil {
+		client = a.options.Clients.Client(r)
+	}
+	if preauth == "" {
+		preauth = "session:" + session
+	}
+	return a.options.Admission.Admit(preauth, client, body, a.options.Now())
+}
+
 func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err error) {
 	var failure *ScopeError
 	if !errors.As(err, &failure) {
@@ -463,11 +535,25 @@ func (a *ScopedAPI) writeFailure(w http.ResponseWriter, r *http.Request, err err
 			copy.Outcome = "unavailable"
 		}
 	}
+	if copy.Status == http.StatusBadGateway || copy.Status == http.StatusServiceUnavailable || copy.Status == http.StatusGatewayTimeout {
+		diag := &requestDiag{owner: "auth"}
+		if known, ok := r.Context().Value(diagKey{}).(*requestDiag); ok {
+			diag = known
+		}
+		a.logFailure(r.Context(), diag.owner, diag.operation, diag.restaurantID, copy.Status, err, a.options.Now().Sub(diag.start))
+	}
 	copy.Cause = nil
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if copy.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(copy.RetryAfter))
+		if _, set := copy.Details["retryAfterSeconds"]; !set {
+			copy.Details = maps.Clone(copy.Details)
+			if copy.Details == nil {
+				copy.Details = map[string]any{}
+			}
+			copy.Details["retryAfterSeconds"] = copy.RetryAfter
+		}
 	}
 	w.WriteHeader(copy.Status)
 	if err := json.NewEncoder(w).Encode(&copy); err != nil {
@@ -533,4 +619,33 @@ func (a *ScopedAPI) observeRuntime(op *scopeOperation, response BusinessResponse
 	if err := a.options.Changes.ObserveRuntime(decision.TenantID, op.Owner, epoch); err != nil {
 		a.options.Logger.Print("scoped runtime observation failed")
 	}
+}
+
+// requestDiag is what a failure record needs to know about the request being served.
+type requestDiag struct {
+	owner, operation, restaurantID string
+	start                          time.Time
+}
+type diagKey struct{}
+
+// ownedError says which side a failure of a summary report came from.
+type ownedError struct {
+	owner string
+	err   error
+}
+
+func (e *ownedError) Error() string { return e.err.Error() }
+func (e *ownedError) Unwrap() error { return e.err }
+
+// logFailure writes one structured record of an upstream failure. It names the class of the cause and
+// leaves out its text, addresses, cookies, tokens, bodies and client addresses.
+func (a *ScopedAPI) logFailure(ctx context.Context, owner, operation, restaurantID string, status int, err error, took time.Duration) {
+	a.failures.LogAttrs(ctx, slog.LevelWarn, "upstream_failure",
+		slog.String("request_id", RequestIDFromContext(ctx)),
+		slog.String("owner", owner),
+		slog.String("operation", operation),
+		slog.String("restaurant_id", restaurantID),
+		slog.Int("status", status),
+		slog.String("class", FailureClass(err)),
+		slog.Int64("duration_ms", took.Milliseconds()))
 }

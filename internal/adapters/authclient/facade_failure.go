@@ -53,6 +53,8 @@ func decodeOperationFailure(data []byte, status int, collection bool) (*operator
 		if wire.Outcome != "unknown" {
 			return nil, errInvalidResult
 		}
+	} else if wire.Code == "CommandConflict" && wire.Outcome == "unknown" {
+		// A retry after Auth cleared the command's result: the result is no longer known (C29).
 	} else if wire.Code == "InvalidArgument" && wire.Outcome == "committed" {
 		// A wrong OTP attempt updates the durable challenge attempt count.
 	} else if !slices.Contains([]string{"not_committed", "unavailable"}, wire.Outcome) {

@@ -5,10 +5,13 @@ import (
 	"io"
 	"log"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/JustIkra/umir-gateway/internal/clientaddr"
 )
 
 func TestRegistrationLimitsPeerBrowserReplayAndWindow(t *testing.T) {
@@ -85,4 +88,66 @@ func TestRegistrationHTTPAdmissionRejectsBeforeAuthAndIgnoresForwardedSpoof(t *t
 			t.Fatalf("invalid refusal: %d %s", w.Code, w.Body.String())
 		}
 	}
+}
+
+func TestW1RegistrationBudgetIsPerClientBehindTrustedProxy(t *testing.T) {
+	now := time.Date(2026, 10, 15, 20, 0, 0, 0, time.FixedZone("Moscow", 3*60*60))
+	proxy := netip.MustParsePrefix("192.0.2.0/24")
+	newAPI := func(trusted ...netip.Prefix) *RemoteAPI {
+		return &RemoteAPI{boundary: &API{v2: true, logger: log.New(io.Discard, "", 0), now: func() time.Time { return now }}, registration: &registrationLimits{}, clients: clientaddr.Resolver{Trusted: trusted}}
+	}
+	// attempt registers with a fresh browser and body, so only the per-address budget (30) can refuse.
+	attempt := func(a *RemoteAPI, n int, forwarded string) bool {
+		r := httptest.NewRequest("POST", "/api/v2/email-challenges", nil)
+		r.RemoteAddr = "192.0.2.1:1234"
+		r.Header.Set("X-Forwarded-For", forwarded)
+		return a.admitRegistration(httptest.NewRecorder(), r, BrowserContext{PreauthToken: fmt.Sprintf("browser-%s-%d", forwarded, n)}, []byte(fmt.Sprintf(`{"commandID":"%d","purpose":"registration"}`, n)))
+	}
+	t.Run("two clients through one trusted proxy have separate budgets", func(t *testing.T) {
+		a := newAPI(proxy)
+		for n := range 30 {
+			if !attempt(a, n, "203.0.113.10") {
+				t.Fatalf("first client refused at %d", n)
+			}
+		}
+		if attempt(a, 30, "203.0.113.10") {
+			t.Fatal("first client over its budget admitted")
+		}
+		if !attempt(a, 0, "203.0.113.11") {
+			t.Fatal("second client refused because of the first")
+		}
+	})
+	t.Run("without trusted proxies the proxy address is the client", func(t *testing.T) {
+		a := newAPI()
+		for n := range 30 {
+			if !attempt(a, n, fmt.Sprintf("203.0.113.%d", n)) {
+				t.Fatalf("refused at %d", n)
+			}
+		}
+		if attempt(a, 30, "203.0.113.200") {
+			t.Fatal("spoofed header gave a separate budget")
+		}
+	})
+	t.Run("forged header entries do not mint budgets", func(t *testing.T) {
+		a := newAPI(proxy)
+		for n := range 30 {
+			if !attempt(a, n, fmt.Sprintf("198.51.100.%d, 203.0.113.10", n)) {
+				t.Fatalf("refused at %d", n)
+			}
+		}
+		if attempt(a, 30, "198.51.100.250, 203.0.113.10") {
+			t.Fatal("forged left entry gave a separate budget")
+		}
+	})
+	t.Run("an invalid body stays outside the budget", func(t *testing.T) {
+		a := newAPI(proxy)
+		for n := range 40 {
+			r := httptest.NewRequest("POST", "/api/v2/email-challenges", nil)
+			r.RemoteAddr = "192.0.2.1:1234"
+			r.Header.Set("X-Forwarded-For", "203.0.113.10")
+			if !a.admitRegistration(httptest.NewRecorder(), r, BrowserContext{PreauthToken: fmt.Sprint(n)}, []byte(`{"purpose":`)) {
+				t.Fatalf("invalid body charged at %d", n)
+			}
+		}
+	})
 }

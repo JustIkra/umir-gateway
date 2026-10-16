@@ -2,6 +2,8 @@ package config
 
 import (
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -203,5 +205,299 @@ func TestG5AuthRuntimeCredentialAndPrivatePort(t *testing.T) {
 	values["PRIVATE_PORT"] = "8080"
 	if _, err := Load(func(k string) string { return values[k] }); err == nil {
 		t.Fatal("public/private port shared")
+	}
+}
+
+func authValues(extra map[string]string) map[string]string {
+	values := map[string]string{"AUTH_URL": "http://127.0.0.1:8085", "AUTH_SERVICE_KEY": "gateway-auth-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "SERVING_URL": "http://127.0.0.1:8083", "WAREHOUSE_URL": "http://127.0.0.1:8082", "FEEDBACK_URL": "http://127.0.0.1:8084", "SERVING_SERVICE_KEY": "s-key", "WAREHOUSE_SERVICE_KEY": "w-key", "FEEDBACK_SERVICE_KEY": "f-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": "http://127.0.0.1:8080"}
+	maps.Copy(values, extra)
+	return values
+}
+
+func TestW1RegistryRefreshDefaults(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RegistryRefreshInterval != 2*time.Second || cfg.RegistryMaxAge != 30*time.Second {
+		t.Fatalf("defaults: %s %s", cfg.RegistryRefreshInterval, cfg.RegistryMaxAge)
+	}
+	if cfg.InstanceID != "" {
+		t.Fatalf("instance has no configured default: %q", cfg.InstanceID)
+	}
+}
+
+func TestW1RegistryRefreshRanges(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"below one second":              {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "999ms"},
+		"above thirty seconds":          {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "31s", "GATEWAY_REGISTRY_MAX_AGE": "5m"},
+		"not a duration":                {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "soon"},
+		"zero":                          {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "0s"},
+		"max age under three intervals": {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "10s", "GATEWAY_REGISTRY_MAX_AGE": "29s"},
+		"max age not a duration":        {"GATEWAY_REGISTRY_MAX_AGE": "old"},
+		"max age negative":              {"GATEWAY_REGISTRY_MAX_AGE": "-1s"},
+		"default max age under default three intervals": {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "30s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(authValues(values))); err == nil {
+				t.Fatal("invalid registry refresh settings accepted")
+			}
+		})
+	}
+	for name, values := range map[string]map[string]string{
+		"minimum":      {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "1s", "GATEWAY_REGISTRY_MAX_AGE": "3s"},
+		"maximum":      {"GATEWAY_REGISTRY_REFRESH_INTERVAL": "30s", "GATEWAY_REGISTRY_MAX_AGE": "90s"},
+		"explicit age": {"GATEWAY_REGISTRY_MAX_AGE": "1m"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(authValues(values))); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestW1InstanceID(t *testing.T) {
+	for _, good := range []string{"gateway-2.eu_1", "umir/gateway#2@eu~1", "~", strings.Repeat("a", 128)} {
+		cfg, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": good})))
+		if err != nil || cfg.InstanceID != good {
+			t.Fatalf("instance %q: %q %v", good, cfg.InstanceID, err)
+		}
+	}
+	for _, bad := range []string{"has space", "line\nbreak", "tab\there", "del\x7f", "nul\x00", strings.Repeat("a", 129), "кириллица"} {
+		if _, err := Load(env(authValues(map[string]string{"GATEWAY_INSTANCE_ID": bad}))); err == nil {
+			t.Fatalf("instance %q accepted", bad)
+		} else if strings.Contains(err.Error(), bad) {
+			t.Fatal("instance value echoed")
+		}
+	}
+}
+
+func TestW1RegistrySettingsIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_REGISTRY_REFRESH_INTERVAL": "soon"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}
+
+func TestW1ExpirationPoolDefaults(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExpirationConcurrency != 8 || cfg.ExpirationIterationBudget != 10*time.Second {
+		t.Fatalf("defaults: %d %s", cfg.ExpirationConcurrency, cfg.ExpirationIterationBudget)
+	}
+}
+
+func TestW1ExpirationPoolRanges(t *testing.T) {
+	for name, values := range map[string]map[string]string{
+		"concurrency zero":          {"GATEWAY_EXPIRATION_CONCURRENCY": "0"},
+		"concurrency negative":      {"GATEWAY_EXPIRATION_CONCURRENCY": "-1"},
+		"concurrency not a number":  {"GATEWAY_EXPIRATION_CONCURRENCY": "many"},
+		"concurrency above limit":   {"GATEWAY_EXPIRATION_CONCURRENCY": "257"},
+		"budget zero":               {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "0s"},
+		"budget negative":           {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "-1s"},
+		"budget not a duration":     {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "long"},
+		"budget below one second":   {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "999ms"},
+		"budget above five minutes": {"GATEWAY_EXPIRATION_ITERATION_BUDGET": "301s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(env(authValues(values)))
+			if err == nil {
+				t.Fatal("invalid scheduler pool settings accepted")
+			}
+			for _, raw := range values {
+				if strings.Contains(err.Error(), raw) {
+					t.Fatal("setting value echoed")
+				}
+			}
+		})
+	}
+	cfg, err := Load(env(authValues(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "256", "GATEWAY_EXPIRATION_ITERATION_BUDGET": "5m"})))
+	if err != nil || cfg.ExpirationConcurrency != 256 || cfg.ExpirationIterationBudget != 5*time.Minute {
+		t.Fatalf("limits rejected: %v", err)
+	}
+	if cfg, err = Load(env(authValues(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "1", "GATEWAY_EXPIRATION_ITERATION_BUDGET": "1s"}))); err != nil || cfg.ExpirationConcurrency != 1 {
+		t.Fatalf("minimum rejected: %v", err)
+	}
+}
+
+func TestW1ExpirationPoolSettingsIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_EXPIRATION_CONCURRENCY": "many"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}
+
+func TestW1LiveRingCapacity(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.LiveRingCapacity != 128 {
+		t.Fatalf("default: %d %v", cfg.LiveRingCapacity, err)
+	}
+	for _, raw := range []string{"0", "15", "4097", "-1", "many"} {
+		_, err := Load(env(authValues(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": raw})))
+		if err == nil || strings.Contains(err.Error(), "many") {
+			t.Fatalf("value %q: %v", raw, err)
+		}
+	}
+	for raw, want := range map[string]int{"16": 16, "4096": 4096} {
+		cfg, err := Load(env(authValues(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": raw})))
+		if err != nil || cfg.LiveRingCapacity != want {
+			t.Fatalf("bound %s rejected: %v", raw, err)
+		}
+	}
+	if _, err := Load(env(withOperator(map[string]string{"GATEWAY_LIVE_RING_CAPACITY": "many"}))); err != nil {
+		t.Fatalf("legacy mode reads Auth-mode settings: %v", err)
+	}
+}
+
+func TestW1LiveStreamLimits(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.LiveMaxStreams != 64 || cfg.LiveMaxStreamsPerSession != 8 || cfg.LiveMaxStreamsPerOrg != 32 {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_LIVE_MAX_STREAMS": "200", "GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": "2", "GATEWAY_LIVE_MAX_STREAMS_PER_ORG": "100"})))
+	if err != nil || cfg.LiveMaxStreams != 200 || cfg.LiveMaxStreamsPerSession != 2 || cfg.LiveMaxStreamsPerOrg != 100 {
+		t.Fatalf("custom: %+v %v", cfg, err)
+	}
+	for _, key := range []string{"GATEWAY_LIVE_MAX_STREAMS", "GATEWAY_LIVE_MAX_STREAMS_PER_SESSION", "GATEWAY_LIVE_MAX_STREAMS_PER_ORG"} {
+		for _, raw := range []string{"0", "-1", "many", "100001"} {
+			_, err := Load(env(authValues(map[string]string{key: raw})))
+			if err == nil || strings.Contains(err.Error(), "many") {
+				t.Fatalf("%s=%q: %v", key, raw, err)
+			}
+		}
+	}
+}
+
+func TestW1TrustedProxyCIDRs(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("default: %v %v", cfg.TrustedProxies, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_TRUSTED_PROXY_CIDRS": "172.20.0.0/16, fd00:1::/48"})))
+	if err != nil || len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[0].String() != "172.20.0.0/16" || cfg.TrustedProxies[1].String() != "fd00:1::/48" {
+		t.Fatalf("list: %v %v", cfg.TrustedProxies, err)
+	}
+	for _, raw := range []string{"not-a-cidr", "172.20.0.0/16,", "0.0.0.0/0", "::/0", "172.20.0.0/33", "172.20.0.1, secret-token"} {
+		_, err := Load(env(authValues(map[string]string{"GATEWAY_TRUSTED_PROXY_CIDRS": raw})))
+		if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "not-a-cidr") {
+			t.Fatalf("value %q: %v", raw, err)
+		}
+	}
+}
+
+func TestW1SummarySettings(t *testing.T) {
+	cfg, err := Load(env(authValues(nil)))
+	if err != nil || cfg.SummaryDeadline != 20*time.Second || cfg.SummaryConcurrency != 4 || cfg.SummaryMaxBytes != 64<<20 {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+	cfg, err = Load(env(authValues(map[string]string{"GATEWAY_SUMMARY_DEADLINE": "1s", "GATEWAY_SUMMARY_CONCURRENCY": "32", "GATEWAY_SUMMARY_MAX_BYTES": "1048576"})))
+	if err != nil || cfg.SummaryDeadline != time.Second || cfg.SummaryConcurrency != 32 || cfg.SummaryMaxBytes != 1<<20 {
+		t.Fatalf("bounds: %+v %v", cfg, err)
+	}
+	for key, values := range map[string][]string{
+		"GATEWAY_SUMMARY_DEADLINE":    {"0s", "999ms", "30s", "-1s", "many"},
+		"GATEWAY_SUMMARY_CONCURRENCY": {"0", "33", "-1", "many"},
+		"GATEWAY_SUMMARY_MAX_BYTES":   {"0", "1048575", "1073741825", "many"},
+	} {
+		for _, raw := range values {
+			_, err := Load(env(authValues(map[string]string{key: raw})))
+			if err == nil || strings.Contains(err.Error(), "many") {
+				t.Fatalf("%s=%q: %v", key, raw, err)
+			}
+		}
+	}
+}
+
+var w1KeyNames = []string{"AUTH_SERVICE_KEY", "AUTH_RUNTIME_SERVICE_KEY", "SERVING_SERVICE_KEY", "WAREHOUSE_SERVICE_KEY", "FEEDBACK_SERVICE_KEY"}
+
+// keyFile writes content to a temporary file and returns its path.
+func keyFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestW1ServiceKeyFromFile(t *testing.T) {
+	values := authValues(nil)
+	want := map[string]string{}
+	for i, name := range w1KeyNames {
+		secret := "file-secret-" + name
+		delete(values, name)
+		values[name+"_FILE"] = keyFile(t, secret+"\n")
+		want[name] = secret
+		if i == 0 { // the last newline only, and a CRLF ending, are dropped
+			values[name+"_FILE"] = keyFile(t, secret+"\r\n")
+		}
+	}
+	cfg, err := Load(env(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{"AUTH_SERVICE_KEY": cfg.AuthServiceKey, "AUTH_RUNTIME_SERVICE_KEY": cfg.AuthRuntimeServiceKey, "SERVING_SERVICE_KEY": cfg.ServingServiceKey, "WAREHOUSE_SERVICE_KEY": cfg.WarehouseServiceKey, "FEEDBACK_SERVICE_KEY": cfg.FeedbackServiceKey}
+	for name, secret := range want {
+		if got[name] != secret {
+			t.Errorf("%s from file: %q", name, got[name])
+		}
+	}
+	// The variables keep working (legacy profiles).
+	if cfg, err := Load(env(authValues(nil))); err != nil || cfg.AuthServiceKey != "gateway-auth-key" {
+		t.Fatalf("variable form: %v", err)
+	}
+	// The same rules apply to the content of a file.
+	for name, content := range map[string]string{"empty": "", "newline only": "\n", "space inside": "two words", "two lines": "a\nb\n"} {
+		values := authValues(map[string]string{"SERVING_SERVICE_KEY_FILE": keyFile(t, content)})
+		delete(values, "SERVING_SERVICE_KEY")
+		if _, err := Load(env(values)); err == nil {
+			t.Errorf("%s: invalid key file accepted", name)
+		}
+	}
+	values = authValues(map[string]string{"AUTH_SERVICE_KEY_FILE": filepath.Join(t.TempDir(), "missing")})
+	delete(values, "AUTH_SERVICE_KEY")
+	if _, err := Load(env(values)); err == nil {
+		t.Error("missing key file accepted")
+	}
+}
+
+func TestW1ServiceKeyBothSourcesIsError(t *testing.T) {
+	for _, name := range w1KeyNames {
+		values := authValues(map[string]string{name: "variable-secret", name + "_FILE": keyFile(t, "file-secret")})
+		if _, err := Load(env(values)); err == nil {
+			t.Errorf("%s: both sources accepted", name)
+		}
+	}
+}
+
+func TestW1ServiceKeyErrorDoesNotEchoSecret(t *testing.T) {
+	for _, name := range w1KeyNames {
+		for what, values := range map[string]map[string]string{
+			"both sources":  {name: "variable-secret", name + "_FILE": keyFile(t, "file-secret")},
+			"spaced file":   {name: "", name + "_FILE": keyFile(t, "file secret")},
+			"oversize file": {name: "", name + "_FILE": keyFile(t, strings.Repeat("x", 5000))},
+		} {
+			_, err := Load(env(authValues(values)))
+			if err == nil {
+				t.Fatalf("%s %s accepted", name, what)
+			}
+			for _, secret := range []string{"variable-secret", "file-secret", "file secret", "xxxx"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("%s %s: error echoes %q: %v", name, what, secret, err)
+				}
+			}
+		}
+	}
+	// A key equal to the Gateway's own Auth key is refused for the runtime key without echoing either.
+	values := authValues(map[string]string{"AUTH_RUNTIME_SERVICE_KEY": "", "AUTH_RUNTIME_SERVICE_KEY_FILE": keyFile(t, "gateway-auth-key\n")})
+	if _, err := Load(env(values)); err == nil || strings.Contains(err.Error(), "gateway-auth-key") {
+		t.Fatalf("equal runtime key: %v", err)
+	}
+}
+
+func TestW1ServiceKeyFileIgnoredWithoutAuth(t *testing.T) {
+	if _, err := Load(env(withOperator(map[string]string{"AUTH_SERVICE_KEY_FILE": keyFile(t, "k")}))); err == nil {
+		t.Fatal("Auth settings without AUTH_URL accepted")
 	}
 }

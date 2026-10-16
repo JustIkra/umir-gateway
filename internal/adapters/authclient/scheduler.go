@@ -11,21 +11,29 @@ import (
 )
 
 func (c *Client) Registry(ctx context.Context) (expiration.Registry, error) {
-	sequence := c.registry.begin()
+	return c.readRegistry(ctx, c.registry.begin())
+}
+
+// readRegistry performs one registry read recorded under the sequence given by begin.
+func (c *Client) readRegistry(ctx context.Context, sequence uint64) (expiration.Registry, error) {
 	var result expiration.Registry
 	err := c.scopeExchange(ctx, http.MethodGet, "/registry", nil, "Registry", &result)
 	if err == nil {
 		if validateErr := result.Validate(); validateErr != nil {
-			c.registry.store(sequence, expiration.Registry{}, c.now(), false)
 			return expiration.Registry{}, scopeUnavailable(validateErr)
 		}
+		if result.Complete {
+			c.registry.store(sequence, result, c.now())
+		}
 	}
-	c.registry.store(sequence, result, c.now(), err == nil && result.Complete)
 	return result, err
 }
 func (c *Client) ServiceToken(ctx context.Context, input expiration.ServiceRequest) (expiration.Credential, error) {
 	if input.Operation != "expiry.due" {
 		return expiration.Credential{}, errors.New("scheduler operation forbidden")
+	}
+	if cached, ok := c.tokens.get(input.RestaurantID, input.Epoch, c.now()); ok {
+		return cached, nil
 	}
 	var result expiration.Credential
 	err := c.scopeCall(ctx, "/service-tokens", input, "Token", &result)
@@ -40,5 +48,6 @@ func (c *Client) ServiceToken(ctx context.Context, input expiration.ServiceReque
 	if err != nil || !result.ExpiresAt.Equal(time.Unix(claims.Expires, 0)) {
 		return expiration.Credential{}, scopeUnavailable(errors.New("inconsistent token expiry"))
 	}
+	c.tokens.put(input.RestaurantID, input.Epoch, result, now)
 	return result, nil
 }

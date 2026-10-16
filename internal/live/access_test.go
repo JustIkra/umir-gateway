@@ -28,12 +28,18 @@ type g4Checker struct {
 	entered chan struct{}
 	calls   int
 	onCheck func()
+	// orgs overrides the organization an access decision names, per restaurant.
+	orgs map[string]string
 }
 
 func (a *g4Checker) AccessCheck(ctx context.Context, r httpapi.AccessCheckRequest) (httpapi.RestaurantAccess, error) {
 	a.mu.Lock()
 	a.calls++
 	block, err, hook := a.block, a.fail, a.onCheck
+	org := "22222222-2222-4222-8222-222222222222"
+	if other, ok := a.orgs[r.RestaurantID]; ok {
+		org = other
+	}
 	a.mu.Unlock()
 	if hook != nil {
 		hook()
@@ -49,7 +55,7 @@ func (a *g4Checker) AccessCheck(ctx context.Context, r httpapi.AccessCheckReques
 	if err != nil {
 		return httpapi.RestaurantAccess{}, err
 	}
-	return httpapi.RestaurantAccess{OrgID: "22222222-2222-4222-8222-222222222222", RestaurantID: r.RestaurantID, Roles: []string{"Warehouse"}, OrgRoles: []string{}, Permissions: []string{"stock.read"}, Settings: httpapi.ScopeSettings{TimeZone: "Europe/Moscow", SettingsVersion: "1"}, LifecycleVersion: "1"}, nil
+	return httpapi.RestaurantAccess{OrgID: org, RestaurantID: r.RestaurantID, Roles: []string{"Warehouse"}, OrgRoles: []string{}, Permissions: []string{"stock.read"}, Settings: httpapi.ScopeSettings{TimeZone: "Europe/Moscow", SettingsVersion: "1"}, LifecycleVersion: "1"}, nil
 }
 func (a *g4Checker) deny(err error) { a.mu.Lock(); defer a.mu.Unlock(); a.fail = err }
 
@@ -63,13 +69,18 @@ type g4LiveFixture struct {
 
 func g4Live(t *testing.T, per, total int) *g4LiveFixture {
 	t.Helper()
+	return g4LiveLimits(t, per, total, total)
+}
+
+func g4LiveLimits(t *testing.T, per, total, perOrg int) *g4LiveFixture {
+	t.Helper()
 	clock := &fakeClock{now: start}
 	j, err := journal.NewScoped("44444444-4444-4444-8444-444444444444", 2, 10, 100, clock.Now, func() string { return rand.Text() }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	checker := &g4Checker{entered: make(chan struct{}, 1)}
-	h, err := NewHandler(ScopedOptions{Auth: checker, Journal: j, Clock: clock, PerSession: per, Total: total, WriteTimeout: time.Second, Logger: log.New(io.Discard, "", 0)})
+	h, err := NewHandler(ScopedOptions{Auth: checker, Journal: j, Clock: clock, PerSession: per, Total: total, PerOrg: perOrg, WriteTimeout: time.Second, Logger: log.New(io.Discard, "", 0)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -167,7 +167,7 @@ func g4CloseFailureHandler(t *testing.T, cfg config.Config) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	streams, err := live.NewHandler(live.ScopedOptions{Auth: auth, Journal: changes, Clock: live.SystemClock{}, PerSession: 4, Total: 4, WriteTimeout: time.Second, Logger: logger})
+	streams, err := live.NewHandler(live.ScopedOptions{Auth: auth, Journal: changes, Clock: live.SystemClock{}, PerSession: 4, PerOrg: 4, Total: 4, WriteTimeout: time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,11 +17,22 @@ import (
 	"github.com/JustIkra/umir-gateway/internal/journal"
 )
 
+// RuntimeAuth is what the runtime needs from Auth. Registry reads at the moment of the call;
+// SharedRegistry lets a burst of callers share one read that may have started earlier, and reports its
+// sequence; RegistryAfter shares a read that started after a ReadMark.
 type RuntimeAuth interface {
 	ControlToken(context.Context, string) (ServiceClaims, error)
 	Registry(context.Context) (expiration.Registry, error)
+	ReadMark() uint64
+	SharedRegistry(context.Context) (expiration.Registry, uint64, error)
+	RegistryAfter(context.Context, uint64) (expiration.Registry, error)
 	RegistrySnapshot() (expiration.Registry, bool)
+	RegistrySnapshotWithin(time.Duration) (expiration.Registry, bool)
 }
+
+// registrationSnapshotAge is how old a registry snapshot may be to answer a registration without a read.
+const registrationSnapshotAge = 2 * time.Second
+
 type RuntimeOptions struct {
 	Auth                             RuntimeAuth
 	ServiceKey, Epoch, TZDataVersion string
@@ -36,7 +47,12 @@ type GatewayRuntime struct {
 	opts    RuntimeOptions
 	mu      sync.Mutex
 	entries map[string]runtimeEntry
+	// live and closed count the entries by state: each class has its own bound.
+	live, closed int
 }
+
+// maxRuntimeEntries bounds live and closed registrations separately; the contract allows 10 000 each.
+const maxRuntimeEntries = 10000
 
 func NewGatewayRuntime(opts RuntimeOptions) (*GatewayRuntime, error) {
 	if opts.Auth == nil || opts.ServiceKey == "" || opts.Epoch == "" || opts.TZDataVersion == "" || opts.Changes == nil {
@@ -133,11 +149,6 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if operation == "runtime.register" {
-		registry, err := g.opts.Auth.Registry(ctx)
-		if err != nil || !registry.Complete {
-			runtimeFailure(w, 503, "AuthUnavailable", "unavailable")
-			return
-		}
 		var settings struct {
 			Settings ScopeSettings `json:"settings"`
 		}
@@ -145,33 +156,8 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			runtimeFailure(w, 400, "InvalidArgument", "not_committed")
 			return
 		}
-		found := false
-		for _, t := range registry.Tombstones {
-			if t.RestaurantID == tenant {
-				runtimeFailure(w, 410, "ScopeDeleted", "not_committed")
-				return
-			}
-		}
-		for _, e := range registry.Entries {
-			if e.Restaurant.RestaurantID != tenant {
-				continue
-			}
-			if found {
-				runtimeFailure(w, 503, "AuthUnavailable", "unavailable")
-				return
-			}
-			found = true
-			if e.Settings.TimeZone != settings.Settings.TimeZone || e.Settings.Version != settings.Settings.SettingsVersion {
-				runtimeFailure(w, 409, "SettingsChanged", "not_committed")
-				return
-			}
-			if e.Restaurant.Lifecycle == "deleting" || e.Restaurant.Lifecycle == "deleted" || e.Restaurant.LifecycleVersion != input.Version || e.Restaurant.OrgID != claims.OrgID {
-				runtimeFailure(w, 410, "ScopeDeleted", "not_committed")
-				return
-			}
-		}
-		if !found {
-			runtimeFailure(w, 410, "ScopeDeleted", "not_committed")
+		if verdict := g.checkRegistration(ctx, tenant, settings.Settings, claims.OrgID, input.Version); verdict.status != 0 {
+			runtimeFailure(w, verdict.status, verdict.code, verdict.outcome)
 			return
 		}
 		if _, err := time.LoadLocation(settings.Settings.TimeZone); err != nil {
@@ -195,16 +181,27 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		runtimeFailure(w, 409, "CommandConflict", "not_committed")
 		return
 	}
-	if !exists && len(g.entries) >= 10000 {
+	closed := operation == "runtime.close"
+	if !exists && (closed && g.closed >= maxRuntimeEntries || !closed && g.live >= maxRuntimeEntries) ||
+		exists && !previous.closed && closed && g.closed >= maxRuntimeEntries {
 		runtimeFailure(w, 503, "ServiceUnavailable", "unavailable")
 		return
 	}
-	closed := operation == "runtime.close"
 	if closed && (!exists || !previous.closed) {
 		if err := g.opts.Changes.CloseScope(tenant); err != nil {
 			runtimeFailure(w, 503, "ServiceUnavailable", "unavailable")
 			return
 		}
+	}
+	if exists && previous.closed {
+		g.closed--
+	} else if exists {
+		g.live--
+	}
+	if closed {
+		g.closed++
+	} else {
+		g.live++
 	}
 	g.entries[tenant] = runtimeEntry{version: version, operation: input.OperationID, closed: closed}
 	state := "ready"
@@ -218,6 +215,80 @@ func (g *GatewayRuntime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		State        string `json:"state"`
 		Version      string `json:"lifecycleVersion"`
 	}{tenant, "gateway", g.opts.Epoch, state, input.Version})
+}
+
+// registrationVerdict is the outcome of checking a registration against the registry; status 0
+// accepts it.
+type registrationVerdict struct {
+	status        int
+	code, outcome string
+}
+
+func (v registrationVerdict) divergent() bool { return v.status == 409 || v.status == 410 }
+
+// checkRegistration compares a registration with the Auth registry. It answers from a snapshot that is
+// young enough and holds the restaurant, otherwise from one shared read. A snapshot or shared read may
+// predate the change Auth is registering, so a verdict that would refuse with 409 or 410 is confirmed
+// by a read that started after the request arrived before it is given.
+func (g *GatewayRuntime) checkRegistration(ctx context.Context, tenant string, settings ScopeSettings, orgID, version string) registrationVerdict {
+	unavailable := registrationVerdict{503, "AuthUnavailable", "unavailable"}
+	mark := g.opts.Auth.ReadMark()
+	registry, ok := g.opts.Auth.RegistrySnapshotWithin(registrationSnapshotAge)
+	// fresh: the answer comes from a read that started after this request arrived.
+	fresh := false
+	if !ok || !registry.Complete || !registryHolds(registry, tenant) {
+		var (
+			sequence uint64
+			err      error
+		)
+		if registry, sequence, err = g.opts.Auth.SharedRegistry(ctx); err != nil || !registry.Complete {
+			return unavailable
+		}
+		fresh = sequence > mark
+	}
+	verdict := judgeRegistration(registry, tenant, settings, orgID, version)
+	if !verdict.divergent() || fresh {
+		return verdict
+	}
+	registry, err := g.opts.Auth.RegistryAfter(ctx, mark)
+	if err != nil || !registry.Complete {
+		return unavailable
+	}
+	return judgeRegistration(registry, tenant, settings, orgID, version)
+}
+
+func registryHolds(registry expiration.Registry, tenant string) bool {
+	return slices.ContainsFunc(registry.Entries, func(e expiration.RegistryEntry) bool { return e.Restaurant.RestaurantID == tenant }) ||
+		slices.ContainsFunc(registry.Tombstones, func(t expiration.Tombstone) bool { return t.RestaurantID == tenant })
+}
+
+func judgeRegistration(registry expiration.Registry, tenant string, settings ScopeSettings, orgID, version string) registrationVerdict {
+	deleted := registrationVerdict{410, "ScopeDeleted", "not_committed"}
+	for _, t := range registry.Tombstones {
+		if t.RestaurantID == tenant {
+			return deleted
+		}
+	}
+	found := false
+	for _, e := range registry.Entries {
+		if e.Restaurant.RestaurantID != tenant {
+			continue
+		}
+		if found {
+			return registrationVerdict{503, "AuthUnavailable", "unavailable"}
+		}
+		found = true
+		if e.Settings.TimeZone != settings.TimeZone || e.Settings.Version != settings.SettingsVersion {
+			return registrationVerdict{409, "SettingsChanged", "not_committed"}
+		}
+		if e.Restaurant.Lifecycle == "deleting" || e.Restaurant.Lifecycle == "deleted" || e.Restaurant.LifecycleVersion != version || e.Restaurant.OrgID != orgID {
+			return deleted
+		}
+	}
+	if !found {
+		return deleted
+	}
+	return registrationVerdict{}
 }
 
 func (g *GatewayRuntime) ready() bool {

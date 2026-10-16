@@ -4,8 +4,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -36,6 +39,30 @@ type Config struct {
 	// ExpirationRunInterval paces the expiration runs the gateway starts on the warehouse.
 	ExpirationRunInterval time.Duration
 	Operator              Operator
+	// RegistryRefreshInterval paces the Auth registry refresh; RegistryMaxAge bounds how old the last
+	// successful snapshot may be for runtime readiness. Both belong to the Auth mode.
+	RegistryRefreshInterval time.Duration
+	RegistryMaxAge          time.Duration
+	// InstanceID names this replica in /readyz; empty means the process generates one.
+	InstanceID string
+	// ExpirationConcurrency bounds the restaurants the scheduler dispatches at once and
+	// ExpirationIterationBudget bounds the time an iteration spends starting dispatches. Both belong to
+	// the Auth mode; the legacy runner has no pool.
+	ExpirationConcurrency     int
+	ExpirationIterationBudget time.Duration
+	// LiveRingCapacity is how many changes the replay ring of one restaurant keeps (Auth mode).
+	LiveRingCapacity int
+	// LiveMaxStreams, LiveMaxStreamsPerSession and LiveMaxStreamsPerOrg bound the open SSE streams of
+	// the process, of one session and of one organization (Auth mode).
+	LiveMaxStreams, LiveMaxStreamsPerSession, LiveMaxStreamsPerOrg int
+	// TrustedProxies are the networks whose X-Forwarded-For Gateway believes (Auth mode); empty means
+	// no proxy is trusted and the peer address is the client.
+	TrustedProxies []netip.Prefix
+	// SummaryDeadline bounds a whole organization summary, SummaryConcurrency the access checks and
+	// reports it runs at once and SummaryMaxBytes the report bytes it holds (Auth mode).
+	SummaryDeadline    time.Duration
+	SummaryConcurrency int
+	SummaryMaxBytes    int64
 }
 
 // maxJournalCapacity keeps the journal buffer, allocated at start, within a few megabytes.
@@ -109,7 +136,9 @@ func Load(getenv func(string) string) (Config, error) {
 		if cfg.AuthURL.Path != "" && cfg.AuthURL.Path != "/" {
 			return Config{}, errors.New("AUTH_URL: expected an origin without a path")
 		}
-		cfg.AuthServiceKey = getenv("AUTH_SERVICE_KEY")
+		if cfg.AuthServiceKey, err = serviceKey(getenv, "AUTH_SERVICE_KEY"); err != nil {
+			return Config{}, err
+		}
 		if cfg.AuthServiceKey == "" || strings.ContainsAny(cfg.AuthServiceKey, " \t\r\n") {
 			return Config{}, errors.New("AUTH_SERVICE_KEY: private transport credential is required")
 		}
@@ -122,7 +151,9 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AUTH_URL: HTTPS is required outside loopback or AUTH_ISOLATED_TEST_NETWORK=true")
 		}
 		for key, destination := range map[string]*string{"SERVING_SERVICE_KEY": &cfg.ServingServiceKey, "WAREHOUSE_SERVICE_KEY": &cfg.WarehouseServiceKey, "FEEDBACK_SERVICE_KEY": &cfg.FeedbackServiceKey} {
-			*destination = getenv(key)
+			if *destination, err = serviceKey(getenv, key); err != nil {
+				return Config{}, err
+			}
 			if *destination == "" || strings.ContainsAny(*destination, " \t\r\n") {
 				return Config{}, fmt.Errorf("%s: private transport credential is required", key)
 			}
@@ -133,7 +164,9 @@ func Load(getenv func(string) string) (Config, error) {
 				return Config{}, fmt.Errorf("%s: scoped transport requires an origin and HTTPS outside isolated tests", key)
 			}
 		}
-		cfg.AuthRuntimeServiceKey = getenv("AUTH_RUNTIME_SERVICE_KEY")
+		if cfg.AuthRuntimeServiceKey, err = serviceKey(getenv, "AUTH_RUNTIME_SERVICE_KEY"); err != nil {
+			return Config{}, err
+		}
 		if cfg.AuthRuntimeServiceKey == "" || strings.ContainsAny(cfg.AuthRuntimeServiceKey, " \t\r\n") || cfg.AuthRuntimeServiceKey == cfg.AuthServiceKey {
 			return Config{}, errors.New("AUTH_RUNTIME_SERVICE_KEY: a separate Auth-to-Gateway transport credential is required")
 		}
@@ -149,13 +182,196 @@ func Load(getenv func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
+		if err := loadRegistrySettings(&cfg, getenv, value); err != nil {
+			return Config{}, err
+		}
+		if err := loadSchedulerPool(&cfg, value); err != nil {
+			return Config{}, err
+		}
+		if err := loadLive(&cfg, value); err != nil {
+			return Config{}, err
+		}
+		if err := loadSummary(&cfg, value); err != nil {
+			return Config{}, err
+		}
+		if cfg.TrustedProxies, err = loadTrustedProxies(getenv("GATEWAY_TRUSTED_PROXY_CIDRS")); err != nil {
+			return Config{}, err
+		}
+	} else if getenv("AUTH_SERVICE_KEY") != "" || getenv("AUTH_SERVICE_KEY_FILE") != "" || getenv("AUTH_TIMEOUT") != "" || getenv("AUTH_ISOLATED_TEST_NETWORK") != "" {
 		return Config{}, errors.New("AUTH_URL: required with Auth settings")
 	}
 	if cfg.Operator, err = loadOperator(getenv, value, cfg.AuthURL != nil); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Bounds of the Auth registry refresh. The snapshot must survive a few missed refreshes, so its
+// maximum age is at least registryMinAgeIntervals refresh intervals.
+const (
+	minRegistryRefreshInterval = time.Second
+	maxRegistryRefreshInterval = 30 * time.Second
+	registryMinAgeIntervals    = 3
+	maxInstanceIDLength        = 128
+)
+
+// loadRegistrySettings reads the Auth-mode readiness settings. It never echoes a value.
+func loadRegistrySettings(cfg *Config, getenv func(string) string, value func(key, fallback string) string) error {
+	var err error
+	cfg.RegistryRefreshInterval, err = duration("GATEWAY_REGISTRY_REFRESH_INTERVAL", value("GATEWAY_REGISTRY_REFRESH_INTERVAL", "2s"))
+	if err != nil || cfg.RegistryRefreshInterval < minRegistryRefreshInterval || cfg.RegistryRefreshInterval > maxRegistryRefreshInterval {
+		return errors.New("GATEWAY_REGISTRY_REFRESH_INTERVAL: expected a duration from 1s to 30s")
+	}
+	cfg.RegistryMaxAge, err = duration("GATEWAY_REGISTRY_MAX_AGE", value("GATEWAY_REGISTRY_MAX_AGE", "30s"))
+	if err != nil {
+		return err
+	}
+	if cfg.RegistryMaxAge < registryMinAgeIntervals*cfg.RegistryRefreshInterval {
+		return errors.New("GATEWAY_REGISTRY_MAX_AGE: must be at least three GATEWAY_REGISTRY_REFRESH_INTERVAL periods")
+	}
+	cfg.InstanceID = getenv("GATEWAY_INSTANCE_ID")
+	if cfg.InstanceID != "" && !validInstanceID(cfg.InstanceID) {
+		return errors.New("GATEWAY_INSTANCE_ID: expected 1 to 128 visible ASCII characters without spaces")
+	}
+	return nil
+}
+
+// Bounds of the scheduler pool.
+const (
+	maxExpirationConcurrency     = 256
+	minExpirationIterationBudget = time.Second
+	maxExpirationIterationBudget = 5 * time.Minute
+)
+
+// loadSchedulerPool reads the Auth-mode scheduler pool settings. It never echoes a value.
+func loadSchedulerPool(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.ExpirationConcurrency, err = strconv.Atoi(value("GATEWAY_EXPIRATION_CONCURRENCY", "8"))
+	if err != nil || cfg.ExpirationConcurrency < 1 || cfg.ExpirationConcurrency > maxExpirationConcurrency {
+		return fmt.Errorf("GATEWAY_EXPIRATION_CONCURRENCY: expected an integer from 1 to %d", maxExpirationConcurrency)
+	}
+	cfg.ExpirationIterationBudget, err = duration("GATEWAY_EXPIRATION_ITERATION_BUDGET", value("GATEWAY_EXPIRATION_ITERATION_BUDGET", "10s"))
+	if err != nil || cfg.ExpirationIterationBudget < minExpirationIterationBudget || cfg.ExpirationIterationBudget > maxExpirationIterationBudget {
+		return errors.New("GATEWAY_EXPIRATION_ITERATION_BUDGET: expected a duration from 1s to 5m")
+	}
+	return nil
+}
+
+// Bounds of the live replay ring.
+const (
+	minLiveRingCapacity = 16
+	maxLiveRingCapacity = 4096
+	maxLiveStreams      = 100_000
+)
+
+// loadLive reads the Auth-mode live settings. It never echoes a value.
+func loadLive(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.LiveRingCapacity, err = strconv.Atoi(value("GATEWAY_LIVE_RING_CAPACITY", "128"))
+	if err != nil || cfg.LiveRingCapacity < minLiveRingCapacity || cfg.LiveRingCapacity > maxLiveRingCapacity {
+		return fmt.Errorf("GATEWAY_LIVE_RING_CAPACITY: expected an integer from %d to %d", minLiveRingCapacity, maxLiveRingCapacity)
+	}
+	for key, setting := range map[string]struct {
+		fallback string
+		target   *int
+	}{
+		"GATEWAY_LIVE_MAX_STREAMS":             {"64", &cfg.LiveMaxStreams},
+		"GATEWAY_LIVE_MAX_STREAMS_PER_SESSION": {"8", &cfg.LiveMaxStreamsPerSession},
+		"GATEWAY_LIVE_MAX_STREAMS_PER_ORG":     {"32", &cfg.LiveMaxStreamsPerOrg},
+	} {
+		if *setting.target, err = strconv.Atoi(value(key, setting.fallback)); err != nil || *setting.target < 1 || *setting.target > maxLiveStreams {
+			return fmt.Errorf("%s: expected an integer from 1 to %d", key, maxLiveStreams)
+		}
+	}
+	return nil
+}
+
+// Bounds of the organization summary. The deadline stays under the 30 s proxy read timeout of the frontend.
+const (
+	minSummaryDeadline    = time.Second
+	maxSummaryDeadline    = 29 * time.Second
+	maxSummaryConcurrency = 32
+	minSummaryMaxBytes    = 1 << 20
+	maxSummaryMaxBytes    = 1 << 30
+)
+
+// loadSummary reads the Auth-mode summary settings. It never echoes a value.
+func loadSummary(cfg *Config, value func(key, fallback string) string) error {
+	var err error
+	cfg.SummaryDeadline, err = duration("GATEWAY_SUMMARY_DEADLINE", value("GATEWAY_SUMMARY_DEADLINE", "20s"))
+	if err != nil || cfg.SummaryDeadline < minSummaryDeadline || cfg.SummaryDeadline > maxSummaryDeadline {
+		return errors.New("GATEWAY_SUMMARY_DEADLINE: expected a duration from 1s to 29s")
+	}
+	cfg.SummaryConcurrency, err = strconv.Atoi(value("GATEWAY_SUMMARY_CONCURRENCY", "4"))
+	if err != nil || cfg.SummaryConcurrency < 1 || cfg.SummaryConcurrency > maxSummaryConcurrency {
+		return fmt.Errorf("GATEWAY_SUMMARY_CONCURRENCY: expected an integer from 1 to %d", maxSummaryConcurrency)
+	}
+	cfg.SummaryMaxBytes, err = strconv.ParseInt(value("GATEWAY_SUMMARY_MAX_BYTES", "67108864"), 10, 64)
+	if err != nil || cfg.SummaryMaxBytes < minSummaryMaxBytes || cfg.SummaryMaxBytes > maxSummaryMaxBytes {
+		return fmt.Errorf("GATEWAY_SUMMARY_MAX_BYTES: expected a byte count from %d to %d", minSummaryMaxBytes, maxSummaryMaxBytes)
+	}
+	return nil
+}
+
+// maxTrustedProxies keeps the list a few lines long: it names the frontend network, not clients.
+const maxTrustedProxies = 64
+
+// loadTrustedProxies parses a comma-separated CIDR list. It never echoes a value.
+func loadTrustedProxies(raw string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var result []netip.Prefix
+	for _, item := range strings.Split(raw, ",") {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(item))
+		if err != nil || prefix.Bits() == 0 {
+			return nil, errors.New("GATEWAY_TRUSTED_PROXY_CIDRS: expected a comma-separated list of CIDR networks narrower than /0")
+		}
+		result = append(result, prefix.Masked())
+	}
+	if len(result) > maxTrustedProxies {
+		return nil, fmt.Errorf("GATEWAY_TRUSTED_PROXY_CIDRS: expected at most %d networks", maxTrustedProxies)
+	}
+	return result, nil
+}
+
+// validInstanceID accepts 1 to 128 visible ASCII characters: no space, control or non-ASCII byte.
+func validInstanceID(id string) bool {
+	if id == "" || len(id) > maxInstanceIDLength {
+		return false
+	}
+	for i := range len(id) {
+		if id[i] < 0x21 || id[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// maxSecretFile bounds a service key file: a key is a short token, anything bigger is a mistake.
+const maxSecretFile = 4096
+
+// serviceKey reads a service key from NAME or from the file named by NAME_FILE, never from both. The
+// file is read whole and one trailing newline is dropped. Neither the value nor the file content is
+// ever put into an error.
+func serviceKey(getenv func(string) string, name string) (string, error) {
+	direct, path := getenv(name), getenv(name+"_FILE")
+	if direct != "" && path != "" {
+		return "", fmt.Errorf("%s: set either %s or %s_FILE, not both", name, name, name)
+	}
+	if path == "" {
+		return direct, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE: the file cannot be read", name)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxSecretFile+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || len(data) > maxSecretFile {
+		return "", fmt.Errorf("%s_FILE: the file cannot be read or is larger than %d bytes", name, maxSecretFile)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), nil
 }
 
 // upstreamURL never echoes the raw value: it may carry credentials.

@@ -18,6 +18,7 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -34,6 +35,10 @@ jobs:
         env:
           GOWORK: 'off'
         run: go test -race -count=100 -timeout=90s ./internal/live -run 'Test(ExpiryEndsTheStreamAfterPeekConfirmsIt|AMovedDeadlineIsReportedInsteadOfAnEnd|TicksFollowTheMinuteAndPingsKeepTheStreamAlive|FakeClockNonPositiveTimerIsReadyWithoutAdvance)$'
+      - name: Repeat production SSE handler regressions
+        env:
+          GOWORK: 'off'
+        run: go test -race -count=10 -timeout=5m ./internal/live -run 'Test(G4|W1)'
       - name: Check Go quality
         run: make check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -48,6 +53,7 @@ jobs:
 
   publish:
     name: Publish image
+    timeout-minutes: 30
     needs: check
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04

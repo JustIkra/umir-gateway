@@ -1,18 +1,37 @@
 package authclient
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/JustIkra/umir-gateway/internal/expiration"
 )
 
+// DefaultRegistryMaxAge is how long the last successful complete registry snapshot stays current
+// when the client is given no explicit bound.
+const DefaultRegistryMaxAge = 30 * time.Second
+
+// registryCache keeps the last successful complete registry and when it was observed. A failed or
+// incomplete read never touches it: the snapshot only ages out.
 type registryCache struct {
 	mu                sync.Mutex
 	sequence, applied uint64
 	observedAt        time.Time
 	available         bool
 	value             expiration.Registry
+	// flight is the shared read in progress, if any.
+	flight *registryFlight
+}
+
+// registryFlight is one registry read that concurrent callers of SharedRegistry wait for together.
+type registryFlight struct {
+	done     chan struct{}
+	sequence uint64
+	registry expiration.Registry
+	err      error
+	// abandoned is set when the caller that ran the read gave up, not Auth: waiters may try again.
+	abandoned bool
 }
 
 func (r *registryCache) begin() uint64 {
@@ -22,29 +41,98 @@ func (r *registryCache) begin() uint64 {
 	return r.sequence
 }
 
-func (r *registryCache) store(sequence uint64, value expiration.Registry, now time.Time, available bool) {
+// store records a successful complete read. An older read finishing after a newer success is dropped.
+func (r *registryCache) store(sequence uint64, value expiration.Registry, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if sequence < r.applied {
 		return
 	}
-	r.applied, r.observedAt, r.available = sequence, now, available
-	if available {
-		r.value = copyRegistry(value)
-	} else {
-		r.value = expiration.Registry{}
-	}
+	r.applied, r.observedAt, r.available = sequence, now, true
+	r.value = copyRegistry(value)
 }
 
+// RegistrySnapshot returns a copy of the last successful complete registry while it is younger than
+// the client's maximum age.
 func (c *Client) RegistrySnapshot() (expiration.Registry, bool) {
+	return c.RegistrySnapshotWithin(c.maxAge)
+}
+
+// RegistrySnapshotWithin is RegistrySnapshot with a stricter bound: the snapshot must also be younger
+// than maxAge.
+func (c *Client) RegistrySnapshotWithin(maxAge time.Duration) (expiration.Registry, bool) {
+	maxAge = min(maxAge, c.maxAge)
 	now := c.now()
 	c.registry.mu.Lock()
 	defer c.registry.mu.Unlock()
 	age := now.Sub(c.registry.observedAt)
-	if !c.registry.available || age < 0 || age >= 5*time.Second {
+	if !c.registry.available || age < 0 || age >= maxAge {
 		return expiration.Registry{}, false
 	}
 	return copyRegistry(c.registry.value), true
+}
+
+// ReadMark returns a mark of the registry reads started so far. A read whose sequence is greater than
+// the mark started after the mark was taken.
+func (c *Client) ReadMark() uint64 {
+	c.registry.mu.Lock()
+	defer c.registry.mu.Unlock()
+	return c.registry.sequence
+}
+
+// SharedRegistry reads the registry like Registry, but a caller that arrives while another read is in
+// progress waits for that read instead of starting its own, so a burst of callers costs one read. The
+// shared read may have started before the caller arrived: use RegistryAfter when the answer must
+// reflect a later moment. It also returns the sequence of the read that produced the answer, to compare
+// with a ReadMark. Each caller receives an independent copy.
+func (c *Client) SharedRegistry(ctx context.Context) (expiration.Registry, uint64, error) {
+	return c.joinRegistry(ctx, 0)
+}
+
+// RegistryAfter returns the result of a registry read that started after the mark was taken. Callers
+// arriving while a qualifying read is in progress share it; a read that started before the mark is
+// waited out and never used, so a burst costs at most one read per wave rather than one per caller.
+func (c *Client) RegistryAfter(ctx context.Context, mark uint64) (expiration.Registry, error) {
+	registry, _, err := c.joinRegistry(ctx, mark)
+	return registry, err
+}
+
+func (c *Client) joinRegistry(ctx context.Context, mark uint64) (expiration.Registry, uint64, error) {
+	for {
+		c.registry.mu.Lock()
+		flight := c.registry.flight
+		if flight == nil {
+			c.registry.sequence++
+			flight = &registryFlight{done: make(chan struct{}), sequence: c.registry.sequence}
+			c.registry.flight = flight
+			c.registry.mu.Unlock()
+			registry, err := c.runFlight(ctx, flight)
+			return registry, flight.sequence, err
+		}
+		usable := flight.sequence > mark
+		c.registry.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return expiration.Registry{}, 0, scopeUnavailable(ctx.Err())
+		}
+		if !usable || (flight.err != nil && flight.abandoned && ctx.Err() == nil) {
+			continue
+		}
+		return copyRegistry(flight.registry), flight.sequence, flight.err
+	}
+}
+
+func (c *Client) runFlight(ctx context.Context, flight *registryFlight) (registry expiration.Registry, err error) {
+	defer func() {
+		// Waiters get their own copies; the leader keeps the original.
+		flight.registry, flight.err, flight.abandoned = copyRegistry(registry), err, err != nil && ctx.Err() != nil
+		c.registry.mu.Lock()
+		c.registry.flight = nil
+		c.registry.mu.Unlock()
+		close(flight.done)
+	}()
+	return c.readRegistry(ctx, flight.sequence)
 }
 
 func copyRegistry(value expiration.Registry) expiration.Registry {

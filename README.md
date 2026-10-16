@@ -577,8 +577,24 @@ docker compose up --build -d --wait
 | `UPSTREAM_TIMEOUT` | `15s`; общий бюджет на приём тела запроса от клиента и обмен с upstream, формат Go duration. Ограничивает и каждый запуск проверки сроков |
 | `JOURNAL_CAPACITY` | `1000`; сколько последних записей хранит журнал изменений, от 1 до 100000 |
 | `EXPIRATION_RUN_INTERVAL` | `1s`; период запуска проверки сроков на складе, формат Go duration |
+| `GATEWAY_REGISTRY_REFRESH_INTERVAL` | `2s`; период чтения реестра Auth, от 1s до 30s; только режим Auth |
+| `GATEWAY_REGISTRY_MAX_AGE` | `30s`; предельный возраст последнего удачного снимка реестра для готовности, не меньше трёх периодов чтения; только режим Auth |
+| `GATEWAY_INSTANCE_ID` | случайный UUID; имя реплики в `/readyz`, 1-128 видимых ASCII-символов без пробелов; только режим Auth |
+| `GATEWAY_EXPIRATION_CONCURRENCY` | `8`; сколько ресторанов планировщик проверяет одновременно, от 1 до 256; только режим Auth |
+| `GATEWAY_EXPIRATION_ITERATION_BUDGET` | `10s`; сколько времени итерация планировщика начинает новые проверки, от 1s до 5m; не успевшие рестораны проверяются первыми в следующей итерации; только режим Auth |
+| `GATEWAY_LIVE_RING_CAPACITY` | `128`; сколько последних изменений хранит кольцо повтора одного ресторана, от 16 до 4096; память выделяется при первом изменении ресторана; только режим Auth (`JOURNAL_CAPACITY` относится к старому режиму) |
+| `GATEWAY_LIVE_MAX_STREAMS` | `64`; сколько потоков SSE одновременно держит процесс, от 1 до 100000; только режим Auth |
+| `GATEWAY_LIVE_MAX_STREAMS_PER_SESSION` | `8`; потоков SSE на одну сессию; только режим Auth |
+| `GATEWAY_LIVE_MAX_STREAMS_PER_ORG` | `32`; потоков SSE на одну организацию, чтобы одна организация не заняла весь процесс; слот организации занимается после первой проверки доступа; только режим Auth |
+| `GATEWAY_TRUSTED_PROXY_CIDRS` | пусто; сети доверенных прокси (frontend) через запятую, например `172.20.0.0/16`. Только от пира из этих сетей Gateway читает `X-Forwarded-For` справа налево и берёт первый адрес вне списка; иначе клиент — адрес пира. IPv6 считается по `/64`. Нужно для бюджетов «по клиенту» на регистрации; только режим Auth |
+| `GATEWAY_SUMMARY_DEADLINE` | `20s`; общий срок сводки организации, от 1s до 29s (меньше `proxy_read_timeout` frontend); не уложившиеся рестораны получают `status: unavailable`; только режим Auth |
+| `GATEWAY_SUMMARY_CONCURRENCY` | `4`; сколько проверок доступа и ресторанов сводка обрабатывает одновременно, от 1 до 32; только режим Auth |
+| `GATEWAY_SUMMARY_MAX_BYTES` | `67108864`; сколько байт отчётов сводка держит на весь запрос, от 1048576 до 1073741824; ресторан, не уложившийся в бюджет, получает `status: unavailable`; только режим Auth |
+| `AUTH_SERVICE_KEY`, `AUTH_RUNTIME_SERVICE_KEY`, `SERVING_SERVICE_KEY`, `WAREHOUSE_SERVICE_KEY`, `FEEDBACK_SERVICE_KEY` | нет; сервисные ключи режима Auth. Каждый можно передать переменной или файлом `<ИМЯ>_FILE` (файл читается целиком, завершающий перевод строки отбрасывается, до 4096 байт); обе формы сразу — ошибка запуска. Значение ключа не попадает в сообщения об ошибках и логи |
 | `TZ` в контейнере | `Europe/Moscow` |
 | `OPERATOR_*` | см. [настройки личного кабинета](#настройки) |
+
+Команда запуска: `server` без аргументов или `server serve` (явный синоним); `healthcheck`, `hash-password` и `clear-sessions` остались. У gateway нет базы, поэтому команд `migrate` и `generation rotate` нет, любая другая команда или опция (например, опечатка `--typo`) — ошибка запуска. Sticky-маршрутизация SSE на стороне frontend (`hash` без `consistent`, C54) на настройки gateway не влияет: живая подписка хранит повтор только в памяти реплики.
 
 URL upstream принимаются только `http(s)` с хостом, без учётных данных, query и fragment; неверная настройка останавливает запуск. Переменные `HTTP_PROXY`/`HTTPS_PROXY` к upstream не применяются.
 
@@ -628,20 +644,37 @@ Release repositories independently. Use annotated `vX.Y.Z` tags for actual relea
 
 Preserve unrelated local edits, stage reviewed paths and check `git diff --cached` and `git diff --check`. Tagging, publishing and shared-history rewrites require the corresponding user instruction. This standard does not create a release or change the current version.
 
+### Сквозной request ID и записи об отказах
+
+Gateway выдаёт каждому внешнему запросу новый `X-Request-ID` (присланный браузером игнорируется), возвращает его в каждом ответе, в том числе с ошибкой, и передаёт Auth и владельцам. Фоновые запуски планировщика ID не получают. На каждый отказ 502, 503 или 504 из-за Auth или владельца пишется одна JSON-запись `upstream_failure` с полями `request_id`, `owner`, `operation`, `restaurant_id`, `status`, `class` (`timeout`, `transport`, `invalid_response`, `schema`, `scope_mismatch`, `upstream_status`) и `duration_ms`; текст причины, адреса, cookie, токены, тела и IP клиента в запись не попадают.
+
+### Временный допуск анонимной обратной связи
+
+`POST /api/v2/feedback/anonymous` проходит допуск после проверки схемы, Origin и CSRF и до запроса токена у Auth: 5 отправок на браузерный контекст за 10 минут, 20 на клиента за час (только при заданном `GATEWAY_TRUSTED_PROXY_CIDRS`) и 200 на процесс за час. Повтор уже принятой отправки (`sha256(preauth‖тело)`) не списывается; невалидное тело в бюджет не входит. Отказ: `429 RateLimited` с `Retry-After` и `details.retryAfterSeconds`. Допуск живёт в памяти процесса (`internal/admission/temporary_memory.go`, пометка `TEMPORARY`): бюджет у каждой реплики свой, файл удаляется в волне, где появляется Redis-допуск, и отдельно не выкатывается.
+
 ### Scoped due-expiry scheduler and private runtime (G5)
 
-Private runtime status uses the last validated Auth registry projection and the local registration table. It performs no synchronous call to Auth. A missing projection, failed later read, clock reversal or age of five seconds makes readiness false. Registry reads from the scheduler and registration path refresh the projection. Later-started reads take precedence over earlier completions, and callers receive independent copies.
+Private runtime status uses the last successful complete Auth registry snapshot and the local registration table. It performs no synchronous call to Auth. A separate refresher reads the registry every `GATEWAY_REGISTRY_REFRESH_INTERVAL` (default `2s`, 1s to 30s); a failed read keeps the previous snapshot, and a snapshot older than `GATEWAY_REGISTRY_MAX_AGE` (default `30s`, at least three refresh intervals) makes readiness false until the next successful read. The scheduler takes the registry from the refresher instead of reading it, so a slow or stalled scheduler iteration never affects readiness. Registration (`PUT .../registry`) answers from a snapshot that is at most 2 seconds old and holds the restaurant; otherwise one registry read is shared by all concurrent registrations, and a verdict that would be 409 or 410 is confirmed by a read made after the request arrived (concurrent callers share such a read). A restaurant Auth deleted less than 2 seconds ago may therefore still be accepted when the request matches the snapshot; Auth closes it with its next call. Reads refresh the snapshot, later-started reads take precedence over earlier completions, and callers receive independent copies.
+
+Two windows follow from the caches and are accepted. A restaurant that Auth deleted less than 2 seconds ago may still be registered when the request matches the snapshot (see above); Auth closes it with its next call. The scheduler may keep sending `expiry.due` for a restaurant Auth has just deleted until its registry snapshot shows the deletion, that is for up to `GATEWAY_REGISTRY_MAX_AGE` (30 seconds by default), and it does so with a service token that is reused until ten seconds before it expires, so the authorization behind a call can be up to 50 seconds older than the call: up to about 80 seconds after the last decision of Auth in the worst case. Warehouse accepts the token and the action is the ordinary expiry of a restaurant that is being deleted; the scope is closed from the same snapshot.
+
+`GET /readyz` on the public listener (never proxied by the frontend) answers `{"instance":"<GATEWAY_INSTANCE_ID>","capabilities":{"http":"ok","scheduler":"ok|degraded|down"}}` with status 200 while the process serves. `GATEWAY_INSTANCE_ID` defaults to a random UUID. The scheduler state follows the time since its last successful iteration (`degraded` after three scheduler intervals or any failed iteration, `down` after ten) and never changes the status code; the details are written to the log once per state change. `GET /healthz` only says that the process is alive. The image healthcheck probes `/readyz` in Auth mode and `/healthz` in the legacy mode.
 
 Each restaurant must have the matching local lifecycle version; deleting scopes and tombstones must be closed locally. Status does not require Auth to echo Gateway's own acknowledgment back before reporting that local registration is ready. Auth reads this status while reconciling and recording that acknowledgment. Restaurant commands still require fresh Auth authorization, and registration still checks fresh Auth state and signed control claims.
 
 Gateway is the sole scheduled expiry owner. In Auth mode it polls immediately
 after process start, then at `EXPIRATION_RUN_INTERVAL` (default `1s`). One process
 goroutine owns all runs; a slow run delays later ticks and never overlaps them.
-Each cycle reads a complete Auth registry and fresh Warehouse status. The runner
+Within a run, up to `GATEWAY_EXPIRATION_CONCURRENCY` restaurants (default 8) are
+dispatched in parallel and the run waits for all of them. After
+`GATEWAY_EXPIRATION_ITERATION_BUDGET` (default `10s`) no new dispatch starts; the
+next run begins with the first restaurant left undone, and a run cut this way is
+logged; as long as it served at least one restaurant it counts as progress (scheduler state `degraded` while the cuts continue, never `down` for this reason alone).
+Each cycle takes the complete Auth registry from the refresher and reads fresh Warehouse status. The runner
 requires a ready restaurant, current Warehouse readiness, and acknowledgments
 for Gateway’s current epoch and Serving. Each attempt has a maximum five-second
-budget and requests a fresh Auth service token for `expiry.due`, one restaurant,
-and that Warehouse epoch. It never requests a human session, registration token,
+budget and uses an Auth service token for `expiry.due`, one restaurant, and that
+Warehouse epoch; a token is reused until ten seconds before it expires. It never requests a human session, registration token,
 or `writeoff.confirm`. Credential failure causes no Warehouse dispatch.
 
 Every due poll has a new UUID run ID. There is one POST per selected tenant per
