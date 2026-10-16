@@ -50,6 +50,8 @@ func newW1Register(t *testing.T, gated bool) *w1Register {
 			writeScopedJSON(t, w, map[string]any{"keys": []any{map[string]any{"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "kid": "synthetic-key", "x": base64.RawURLEncoding.EncodeToString(public)}}})
 		case "/internal/auth/v1/registry":
 			f.fetches.Add(1)
+			// The answer reflects Auth at the moment the read starts, as a slow read of a big registry does.
+			present, lifecycle, settings := f.present.Load(), f.state.Load(), f.settings.Load()
 			if f.gate != nil {
 				select {
 				case <-f.gate:
@@ -58,8 +60,8 @@ func newW1Register(t *testing.T, gated bool) *w1Register {
 				}
 			}
 			entries := []any{}
-			if f.present.Load() {
-				entries = append(entries, map[string]any{"restaurant": map[string]any{"restaurantID": scopedRestaurant, "orgID": scopedOrg, "name": "Synthetic", "lifecycle": f.state.Load(), "lifecycleVersion": "1"}, "settings": map[string]any{"timeZone": "Europe/Moscow", "settingsVersion": f.settings.Load()}, "services": []any{}})
+			if present {
+				entries = append(entries, map[string]any{"restaurant": map[string]any{"restaurantID": scopedRestaurant, "orgID": scopedOrg, "name": "Synthetic", "lifecycle": lifecycle, "lifecycleVersion": "1"}, "settings": map[string]any{"timeZone": "Europe/Moscow", "settingsVersion": settings}, "services": []any{}})
 			}
 			writeScopedJSON(t, w, map[string]any{"registryRevision": "1", "complete": true, "entries": entries, "tombstones": []any{}})
 		default:
@@ -188,5 +190,72 @@ func TestW1RegisterRechecksDivergenceBeforeRefusing(t *testing.T) {
 	f.present.Store(true)
 	if code := f.put("2"); code != http.StatusOK {
 		t.Fatalf("restaurant that appeared after the snapshot: %d", code)
+	}
+}
+
+// N parallel registrations of a restaurant Auth does not have are all refused with 410, and the
+// confirming reads are shared too: the cost is a few reads, not one per caller.
+func TestW1RegisterOfAbsentRestaurantCoalescesConfirmingReads(t *testing.T) {
+	f := newW1Register(t, true)
+	f.present.Store(false)
+	const callers = 12
+	codes := make([]int, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Go(func() { codes[i] = f.put("1") })
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(f.gate)
+	wg.Wait()
+	for i, code := range codes {
+		if code != http.StatusGone {
+			t.Fatalf("caller %d: %d, want 410", i, code)
+		}
+	}
+	if got := f.fetches.Load(); got > 3 {
+		t.Fatalf("%d parallel refusals read the registry %d times, want at most 3", callers, got)
+	}
+}
+
+// A refusal is never given on the strength of a read that started before the request arrived: a
+// read already in progress when Auth registered the restaurant must not turn the registration into 410.
+func TestW1RegisterIgnoresReadStartedBeforeTheRequest(t *testing.T) {
+	f := newW1Register(t, true)
+	f.present.Store(false)
+	first := make(chan int, 1)
+	go func() { first <- f.put("1") }()
+	for f.fetches.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	// The read in flight saw no restaurant. Auth registers it, then calls Gateway.
+	f.present.Store(true)
+	second := make(chan int, 1)
+	go func() { second <- f.put("1") }()
+	time.Sleep(200 * time.Millisecond)
+	close(f.gate)
+	if code := <-second; code != http.StatusOK {
+		t.Fatalf("registration of a restaurant that appeared after the shared read started: %d", code)
+	}
+	if code := <-first; code != http.StatusGone {
+		t.Fatalf("the caller whose own read saw no restaurant: %d, want 410", code)
+	}
+}
+
+// Accepted behaviour of the specification: a snapshot up to 2 s old answers a registration, so a
+// restaurant Auth deleted a moment ago is still accepted when the request matches the snapshot. Auth
+// closes it with the next call; past 2 s the registration reads again and is refused.
+func TestW1RegisterSnapshotWindowAcceptsRecentDeletionOnly(t *testing.T) {
+	f := newW1Register(t, false)
+	if code := f.put("1"); code != http.StatusOK {
+		t.Fatalf("first registration: %d", code)
+	}
+	f.state.Store("deleting")
+	f.clock.Advance(time.Second)
+	if code := f.put("1"); code != http.StatusOK {
+		t.Fatalf("inside the 2 s window: %d, want 200 (snapshot answer)", code)
+	}
+	f.clock.Advance(2 * time.Second)
+	if code := f.put("1"); code != http.StatusGone {
+		t.Fatalf("past the 2 s window: %d, want 410", code)
 	}
 }

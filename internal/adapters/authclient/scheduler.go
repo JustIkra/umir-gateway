@@ -11,7 +11,11 @@ import (
 )
 
 func (c *Client) Registry(ctx context.Context) (expiration.Registry, error) {
-	sequence := c.registry.begin()
+	return c.readRegistry(ctx, c.registry.begin())
+}
+
+// readRegistry performs one registry read recorded under the sequence given by begin.
+func (c *Client) readRegistry(ctx context.Context, sequence uint64) (expiration.Registry, error) {
 	var result expiration.Registry
 	err := c.scopeExchange(ctx, http.MethodGet, "/registry", nil, "Registry", &result)
 	if err == nil {

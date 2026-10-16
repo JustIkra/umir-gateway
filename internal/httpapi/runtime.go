@@ -18,11 +18,14 @@ import (
 )
 
 // RuntimeAuth is what the runtime needs from Auth. Registry reads at the moment of the call;
-// SharedRegistry lets a burst of callers share one read that may have started earlier.
+// SharedRegistry lets a burst of callers share one read that may have started earlier, and reports its
+// sequence; RegistryAfter shares a read that started after a ReadMark.
 type RuntimeAuth interface {
 	ControlToken(context.Context, string) (ServiceClaims, error)
 	Registry(context.Context) (expiration.Registry, error)
-	SharedRegistry(context.Context) (expiration.Registry, error)
+	ReadMark() uint64
+	SharedRegistry(context.Context) (expiration.Registry, uint64, error)
+	RegistryAfter(context.Context, uint64) (expiration.Registry, error)
 	RegistrySnapshot() (expiration.Registry, bool)
 	RegistrySnapshotWithin(time.Duration) (expiration.Registry, bool)
 }
@@ -210,21 +213,28 @@ func (v registrationVerdict) divergent() bool { return v.status == 409 || v.stat
 // checkRegistration compares a registration with the Auth registry. It answers from a snapshot that is
 // young enough and holds the restaurant, otherwise from one shared read. A snapshot or shared read may
 // predate the change Auth is registering, so a verdict that would refuse with 409 or 410 is confirmed
-// by a read made now before it is given.
+// by a read that started after the request arrived before it is given.
 func (g *GatewayRuntime) checkRegistration(ctx context.Context, tenant string, settings ScopeSettings, orgID, version string) registrationVerdict {
 	unavailable := registrationVerdict{503, "AuthUnavailable", "unavailable"}
+	mark := g.opts.Auth.ReadMark()
 	registry, ok := g.opts.Auth.RegistrySnapshotWithin(registrationSnapshotAge)
+	// fresh: the answer comes from a read that started after this request arrived.
+	fresh := false
 	if !ok || !registry.Complete || !registryHolds(registry, tenant) {
-		var err error
-		if registry, err = g.opts.Auth.SharedRegistry(ctx); err != nil || !registry.Complete {
+		var (
+			sequence uint64
+			err      error
+		)
+		if registry, sequence, err = g.opts.Auth.SharedRegistry(ctx); err != nil || !registry.Complete {
 			return unavailable
 		}
+		fresh = sequence > mark
 	}
 	verdict := judgeRegistration(registry, tenant, settings, orgID, version)
-	if !verdict.divergent() {
+	if !verdict.divergent() || fresh {
 		return verdict
 	}
-	registry, err := g.opts.Auth.Registry(ctx)
+	registry, err := g.opts.Auth.RegistryAfter(ctx, mark)
 	if err != nil || !registry.Complete {
 		return unavailable
 	}

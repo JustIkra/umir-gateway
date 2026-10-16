@@ -18,8 +18,8 @@ type poolPeer struct {
 	delay    time.Duration
 	// onDue runs inside every Due call, after the delay; tests use it to move an injected clock.
 	onDue func()
-	// failDue makes Due fail with a lost reply.
-	failDue atomic.Bool
+	// failDue makes Due fail with a lost reply; failRegistry makes the registry unavailable.
+	failDue, failRegistry atomic.Bool
 
 	mu              sync.Mutex
 	appended        map[string]int
@@ -40,7 +40,12 @@ func poolRegistry(n int) Registry {
 	return registry
 }
 
-func (p *poolPeer) Registry(context.Context) (Registry, error) { return p.registry, nil }
+func (p *poolPeer) Registry(context.Context) (Registry, error) {
+	if p.failRegistry.Load() {
+		return Registry{}, errors.New("registry unavailable")
+	}
+	return p.registry, nil
+}
 func (p *poolPeer) ServiceToken(context.Context, ServiceRequest) (Credential, error) {
 	p.mu.Lock()
 	p.tokens++
@@ -252,5 +257,58 @@ func TestW1SchedulerParallelDispatchKeepsPerRestaurantState(t *testing.T) {
 		if n != 2 {
 			t.Fatalf("restaurant %s invalidated %d times, want 2 (unknown once, recovery once)", id, n)
 		}
+	}
+}
+
+// An iteration cut by its budget that still served restaurants is progress, not a failure: it keeps
+// the scheduler alive (never down) but is reported as degraded while the cuts continue.
+func TestW1TruncatedIterationsDegradeButNeverDown(t *testing.T) {
+	var offset atomic.Int64
+	base := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	now := func() time.Time { return base.Add(time.Duration(offset.Load())) }
+	p := &poolPeer{registry: poolRegistry(10), onDue: func() { offset.Add(int64(10 * time.Millisecond)) }}
+	r := newPoolRunner(t, p, now, 1, 25*time.Millisecond)
+	for i := range 30 {
+		r.runIteration(context.Background())
+		h := r.Health()
+		if h.ConsecutiveFailures != 0 || !h.Truncated || h.LastSuccess.IsZero() {
+			t.Fatalf("truncated iteration %d: %+v", i, h)
+		}
+		if state := h.State(now(), time.Second); state != StateDegraded {
+			t.Fatalf("truncated iteration %d: state %s, want degraded", i, state)
+		}
+		offset.Add(int64(time.Second)) // well past ten intervals over the loop
+	}
+	// A complete iteration clears the mark.
+	r.opts.IterationBudget = time.Hour
+	r.runIteration(context.Background())
+	if h := r.Health(); h.Truncated || h.State(now(), time.Second) != StateOK {
+		t.Fatalf("complete iteration: %+v", h)
+	}
+}
+
+// Iterations that reach no restaurant stay failures under the old rules, truncated before or not.
+func TestW1FailedIterationsAfterTruncationFollowTheOldRules(t *testing.T) {
+	var offset atomic.Int64
+	base := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	now := func() time.Time { return base.Add(time.Duration(offset.Load())) }
+	p := &poolPeer{registry: poolRegistry(10), onDue: func() { offset.Add(int64(10 * time.Millisecond)) }}
+	r := newPoolRunner(t, p, now, 1, 25*time.Millisecond)
+	r.runIteration(context.Background())
+	if !r.Health().Truncated {
+		t.Fatal("setup: the first iteration was not cut")
+	}
+	p.failRegistry.Store(true)
+	r.runIteration(context.Background())
+	h := r.Health()
+	if h.ConsecutiveFailures != 1 || h.Truncated {
+		t.Fatalf("failed iteration: %+v", h)
+	}
+	for range 4 {
+		offset.Add(int64(3 * time.Second))
+		r.runIteration(context.Background())
+	}
+	if state := r.Health().State(now(), time.Second); state != StateDown {
+		t.Fatalf("a long run of failed iterations is %s, want down", state)
 	}
 }

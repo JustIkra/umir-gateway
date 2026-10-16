@@ -120,16 +120,22 @@ type ScopedRunner struct {
 	// resumeAt is the restaurant the next iteration starts with after a budget-cut iteration. Only the
 	// iteration goroutine reads and writes it.
 	resumeAt string
+	// truncated is set by dispatchAll when the budget cut the iteration; same owner as resumeAt.
+	truncated bool
 }
 
 // SchedulerHealth summarizes the iterations of the scheduler: when the last one started, when one last
 // succeeded, how long the last finished one took and how many failed in a row. An iteration succeeds
-// when it obtained a usable registry and a ready Warehouse and reached every restaurant; a single
-// restaurant's failed dispatch does not fail it.
+// when it obtained a usable registry and a ready Warehouse and reached every restaurant, or was cut by
+// its budget after serving some (see Truncated); a single restaurant's failed dispatch does not fail it.
 type SchedulerHealth struct {
 	LastStart, LastSuccess time.Time
 	LastDuration           time.Duration
 	ConsecutiveFailures    int
+	// Truncated marks that the last iteration stopped starting dispatches at its budget after serving
+	// at least one restaurant. Such an iteration is progress, so it counts as a success, but the
+	// scheduler is not caught up and reads as degraded while the cuts continue.
+	Truncated bool
 }
 
 // Scheduler states reported through readiness.
@@ -159,7 +165,7 @@ func (h SchedulerHealth) State(now time.Time, interval time.Duration) string {
 	switch {
 	case lag > downLagIntervals*interval:
 		return StateDown
-	case lag > degradedLagIntervals*interval || h.ConsecutiveFailures > 0:
+	case lag > degradedLagIntervals*interval || h.ConsecutiveFailures > 0 || h.Truncated:
 		return StateDegraded
 	}
 	return StateOK
@@ -186,7 +192,11 @@ func (r *ScopedRunner) runIteration(ctx context.Context) {
 	r.healthMu.Lock()
 	r.health.LastStart = start
 	r.healthMu.Unlock()
-	succeeded := r.tick(ctx)
+	r.truncated = false
+	complete := r.tick(ctx)
+	// A budget cut always follows at least one started dispatch, so it is progress.
+	truncated := r.truncated
+	succeeded := complete || truncated
 	if ctx.Err() != nil {
 		// An iteration cut short by shutdown says nothing about the scheduler.
 		return
@@ -194,6 +204,7 @@ func (r *ScopedRunner) runIteration(ctx context.Context) {
 	end := r.opts.Now()
 	r.healthMu.Lock()
 	r.health.LastDuration = end.Sub(start)
+	r.health.Truncated = truncated
 	if succeeded {
 		r.health.LastSuccess, r.health.ConsecutiveFailures = end, 0
 	} else {
@@ -212,7 +223,7 @@ func (r *ScopedRunner) logStateChange(h SchedulerHealth, now time.Time) {
 		return
 	}
 	r.loggedState = state
-	r.opts.Logger.Printf("event=scheduler_state state=%s last_start=%s last_success=%s last_duration=%s consecutive_failures=%d", state, formatInstant(h.LastStart), formatInstant(h.LastSuccess), h.LastDuration, h.ConsecutiveFailures)
+	r.opts.Logger.Printf("event=scheduler_state state=%s last_start=%s last_success=%s last_duration=%s consecutive_failures=%d truncated=%t", state, formatInstant(h.LastStart), formatInstant(h.LastSuccess), h.LastDuration, h.ConsecutiveFailures, h.Truncated)
 }
 
 func formatInstant(t time.Time) string {
@@ -361,6 +372,7 @@ dispatching:
 		return ctx.Err() == nil
 	}
 	if cut {
+		r.truncated = true
 		r.resumeAt = ready[(first+reached)%n].RestaurantID
 		r.opts.Logger.Printf("scheduler iteration budget exhausted reached=%d total=%d", reached, n)
 	}
