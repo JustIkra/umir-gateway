@@ -96,7 +96,8 @@ func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (com
 	var app components
 	var err error
 	if cfg.AuthURL != nil {
-		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: testAdmission(t, cfg)})
+		service, slots := testAdmission(t, cfg)
+		app, err = newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service, slots: slots})
 	} else {
 		app, err = newComponents(cfg, logger)
 	}
@@ -116,7 +117,7 @@ func componentsForTest(t *testing.T, cfg config.Config, logger *log.Logger) (com
 	return app, err
 }
 
-func testAdmission(t *testing.T, cfg config.Config) *admission.Service {
+func testAdmission(t *testing.T, cfg config.Config) (*admission.Service, admission.Slots) {
 	t.Helper()
 	store := memredis.New(time.Now())
 	budgets := make(map[string]admission.Budget, len(cfg.Budgets))
@@ -127,7 +128,7 @@ func testAdmission(t *testing.T, cfg config.Config) *admission.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service
+	return service, store.Slots()
 }
 
 func loadConfig(t *testing.T, values map[string]string) config.Config {

@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JustIkra/umir-gateway/internal/admission"
 	"github.com/JustIkra/umir-gateway/internal/httpapi"
 	"github.com/JustIkra/umir-gateway/internal/journal"
 	"github.com/JustIkra/umir-gateway/internal/operator"
@@ -20,9 +22,16 @@ type AccessChecker interface {
 }
 
 type ScopedOptions struct {
-	Auth    AccessChecker
-	Journal *journal.Scoped
-	Clock   Clock
+	Auth      AccessChecker
+	Journal   *journal.Scoped
+	Clock     Clock
+	Admission interface {
+		StreamLimits(context.Context, string, string) ([]admission.SlotLimit, error)
+	}
+	Slots              admission.Slots
+	LeaseTTL           time.Duration
+	LeaseRenewInterval time.Duration
+	NewLeaseID         func() string
 	// PerSession bounds the streams of one session, PerOrg those of one organization and Total those of
 	// the process.
 	PerSession, PerOrg, Total int
@@ -44,6 +53,23 @@ type Handler struct {
 func NewHandler(opts ScopedOptions) (*Handler, error) {
 	if opts.Auth == nil || opts.Journal == nil || opts.Clock == nil || opts.Logger == nil || opts.PerSession <= 0 || opts.PerOrg <= 0 || opts.Total <= 0 || opts.WriteTimeout <= 0 {
 		return nil, errors.New("live: scoped dependencies and bounds are required")
+	}
+	if (opts.Admission == nil) != (opts.Slots == nil) {
+		return nil, errors.New("live: admission policy and shared slots must be configured together")
+	}
+	if opts.Slots != nil {
+		if opts.LeaseTTL == 0 {
+			opts.LeaseTTL = 30 * time.Second
+		}
+		if opts.LeaseRenewInterval == 0 {
+			opts.LeaseRenewInterval = opts.LeaseTTL / 3
+		}
+		if opts.NewLeaseID == nil {
+			opts.NewLeaseID = rand.Text
+		}
+		if opts.LeaseTTL < 3*time.Millisecond || opts.LeaseRenewInterval <= 0 || opts.LeaseRenewInterval >= opts.LeaseTTL {
+			return nil, errors.New("live: invalid shared lease timing")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Handler{opts: opts, open: map[string]int{}, openOrg: map[string]int{}, closing: ctx, cancel: cancel}, nil
@@ -160,11 +186,31 @@ func (h *Handler) ServeScope(w http.ResponseWriter, r *http.Request, tenant, ses
 		h.refuse(w, err)
 		return
 	}
-	if !h.acquireOrg(access.OrgID) {
-		scopedRefusal(w, http.StatusTooManyRequests, "RateLimited", 1)
-		return
+	if h.opts.Slots == nil {
+		if !h.acquireOrg(access.OrgID) {
+			scopedRefusal(w, http.StatusTooManyRequests, "RateLimited", 1)
+			return
+		}
+		defer h.releaseOrg(access.OrgID)
+	} else {
+		lease, grant, err := h.acquireLease(ctx, session, access.OrgID)
+		if err != nil {
+			scopedFailure(w, http.StatusServiceUnavailable, "ServiceUnavailable")
+			return
+		}
+		if !grant.Granted {
+			scopedRefusal(w, http.StatusTooManyRequests, "RateLimited", 1)
+			return
+		}
+		leaseCtx, cancelLease := context.WithCancel(ctx)
+		leaseDone := make(chan struct{})
+		go h.renewLease(leaseCtx, cancel, lease, leaseDone)
+		defer func() {
+			cancelLease()
+			<-leaseDone
+			h.releaseLease(lease)
+		}()
 	}
-	defer h.releaseOrg(access.OrgID)
 	signals, stop, err := h.opts.Journal.Watch(tenant)
 	if err != nil {
 		scopedFailure(w, 503, "UpstreamUnavailable")

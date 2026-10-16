@@ -32,7 +32,9 @@ type componentEnv struct {
 	newTicker func(time.Duration) (<-chan time.Time, func())
 	admission interface {
 		Admit(context.Context, admission.Rule, admission.Subjects, admission.Attempt) (admission.Verdict, error)
+		StreamLimits(context.Context, string, string) ([]admission.SlotLimit, error)
 	}
+	slots admission.Slots
 }
 
 func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error) {
@@ -56,7 +58,7 @@ func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error
 	if err != nil {
 		return components{}, errors.Join(err, adapter.Close())
 	}
-	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service})
+	app, err := newAuthComponentsWith(cfg, logger, componentEnv{now: time.Now, newTicker: newTicker, admission: service, slots: adapter.Slots()})
 	if err != nil {
 		return components{}, errors.Join(err, adapter.Close())
 	}
@@ -65,8 +67,8 @@ func newAuthComponents(cfg config.Config, logger *log.Logger) (components, error
 }
 
 func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentEnv) (components, error) {
-	if env.admission == nil {
-		return components{}, errors.New("Auth mode requires shared admission storage")
+	if env.admission == nil || env.slots == nil {
+		return components{}, errors.New("Auth mode requires shared admission storage and SSE slots")
 	}
 	transport := &http.Transport{MaxIdleConnsPerHost: 64, IdleConnTimeout: 90 * time.Second}
 	client, err := authclient.New(authclient.Options{URL: cfg.AuthURL, ServiceKey: cfg.AuthServiceKey, Timeout: cfg.AuthTimeout, Transport: transport, Now: env.now, MaxAge: cfg.RegistryMaxAge})
@@ -109,7 +111,7 @@ func newAuthComponentsWith(cfg config.Config, logger *log.Logger, env componentE
 	if err != nil {
 		return components{}, err
 	}
-	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
+	streams, err := live.NewHandler(live.ScopedOptions{Auth: client, Journal: changes, Clock: live.SystemClock{}, Admission: env.admission, Slots: env.slots, LeaseTTL: 30 * time.Second, LeaseRenewInterval: 10 * time.Second, PerSession: cfg.LiveMaxStreamsPerSession, PerOrg: cfg.LiveMaxStreamsPerOrg, Total: cfg.LiveMaxStreams, WriteTimeout: live.DefaultWriteTimeout, Logger: logger})
 	if err != nil {
 		return components{}, err
 	}

@@ -121,7 +121,8 @@ func TestG5RuntimeRegisterCloseAndTombstone(t *testing.T) {
 	start := time.Now().Add(20 * time.Second)
 	now := func() time.Time { return start.Add(time.Duration(offset.Load())) }
 	cfg := loadConfig(t, map[string]string{"AUTH_URL": peer.URL, "SERVING_URL": peer.URL, "WAREHOUSE_URL": peer.URL, "FEEDBACK_URL": peer.URL, "AUTH_SERVICE_KEY": "auth-key", "SERVING_SERVICE_KEY": "serving-key", "WAREHOUSE_SERVICE_KEY": "warehouse-key", "FEEDBACK_SERVICE_KEY": "feedback-key", "AUTH_RUNTIME_SERVICE_KEY": "auth-runtime-key", "OPERATOR_COOKIE_MODE": "loopback-development", "OPERATOR_PUBLIC_ORIGIN": testOrigin})
-	app, err := newAuthComponentsWith(cfg, log.New(io.Discard, "", 0), componentEnv{now: now, newTicker: newTicker, admission: testAdmission(t, cfg)})
+	service, slots := testAdmission(t, cfg)
+	app, err := newAuthComponentsWith(cfg, log.New(io.Discard, "", 0), componentEnv{now: now, newTicker: newTicker, admission: service, slots: slots})
 	if err != nil {
 		t.Fatal(err)
 	}
