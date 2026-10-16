@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Send `Accept-Encoding: identity` to owners on scoped routes, so a future compressing owner cannot turn every reply into 502.
+
 - Add end-to-end request IDs and failure diagnostics. Every external request gets a fresh `X-Request-ID` (a browser-supplied one is ignored), returned in every response including errors and sent to Auth and to the owners; background scheduler runs carry none. Each 502, 503 or 504 caused by Auth or an owner writes one JSON record (`request_id`, `owner`, `operation`, `restaurant_id`, `status`, `class` of `timeout|transport|invalid_response|schema|scope_mismatch|upstream_status`, `duration_ms`) without cause text, addresses, cookies, tokens, bodies or client addresses.
 
 - Bound the organization summary: one overall deadline `GATEWAY_SUMMARY_DEADLINE` (default 20s, 1s-29s), `GATEWAY_SUMMARY_CONCURRENCY` (default 4, 1-32) for access checks and reports, and a byte budget `GATEWAY_SUMMARY_MAX_BYTES` (default 64 MiB) for all reports of a request. Restaurants that miss the deadline or the budget are `unavailable` with `UpstreamUnavailable`; the order of restaurants follows the request, any access refusal still fails the whole request before business calls, the result is checked against `OrgSummary`, and `evaluatedAt` is written in Europe/Moscow. The public contract is unchanged.

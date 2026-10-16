@@ -153,3 +153,18 @@ func TestW1UpstreamFailureLogHasReasonButNoSecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestW1OwnersAreAskedForIdentityEncoding(t *testing.T) {
+	f := newScopedFixture(t)
+	f.peer = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		page := summaryPage(scopedRestaurant, "stock", true)
+		writeScopedJSON(t, w, map[string]any{"context": page["context"], "result": map[string]any{"items": page["items"]}})
+	}
+	w := f.request("GET", "/api/v2/r/"+scopedRestaurant+"/warehouse/inventory", "", map[string]string{"Accept-Encoding": "gzip, br"})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w.Code != http.StatusOK || len(f.requests) != 1 || f.requests[0].Header.Get("Accept-Encoding") != "identity" {
+		t.Fatalf("status %d, owner saw %v", w.Code, f.requests)
+	}
+}

@@ -337,6 +337,8 @@ func scopedHeaders(source http.Header, token, requestID string) http.Header {
 	}
 	result.Set("Authorization", "Bearer "+token)
 	result.Set("Accept", "application/json")
+	// A compressed owner reply would fail JSON validation and turn into 502.
+	result.Set("Accept-Encoding", "identity")
 	return result
 }
 
